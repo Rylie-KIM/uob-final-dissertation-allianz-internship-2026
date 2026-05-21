@@ -1,0 +1,4 @@
+version,n_investigated,investigation_rate,observed_fraud_rate,auc_on_investigated,true_recall,precision,loop_amplification_factor,blind_spot_fraud_fraction
+1,2892,0.2892,0.27385892116182575,0.6409,0.4651,0.2766,1.608,0.5349
+2,2758,0.2758,0.30384336475707036,0.5994,0.5,0.4049,1.813,0.5
+3,2758,0.2758,0.3049311094996374,0.6069,0.5,0.3923,1.813,0.5
