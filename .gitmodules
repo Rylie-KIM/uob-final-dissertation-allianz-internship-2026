@@ -1,0 +1,3 @@
+[submodule "report"]
+	path = report
+	url = git@github.com:Rylie-KIM/uob-allianz-project-2026.git
