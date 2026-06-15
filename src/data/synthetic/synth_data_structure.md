@@ -35,9 +35,13 @@ Total columns: 39 (claims table) | Output files: claims_pre_v1.parquet, claims_v
             pre_ml_decision = 1  →  scrapped  →  pre_ml_label = 1              (self-fulfilling)
             pre_ml_decision = 0  →  garage    →  pre_ml_label = garage_outcome  (actual result)
 
-[Step 4]   Train Model v1 on pre-ML labels (2016–2021, all pre-2022 including COVID)
-            XGBClassifier.fit(X_pre_ml, y=pre_ml_label)
-            →  model_v1_score applied to all 10,000 rows
+[Step 4]   Train Model v1 on pre-ML labels
+            Effective training window (after maturation buffer + OOT):
+              Train + Test : 2016-01 → 2021-04  (80/20 random split)
+              OOT holdout  : 2021-05 → 2021-10  (6 months, temporally latest)
+              Excluded     : 2021-11 → 2021-12  (2-month maturation buffer)
+            XGBClassifier.fit(X_train, y=pre_ml_label[train_rows])
+            →  model_v1_score applied to all 10,000 rows (score all, train on subset)
 
 [Step 5]   Apply v1 policy: 90th percentile threshold  →  model_v1_decision
             model_v1_decision = 1  →  scrapped  →  model_v1_observed_outcome = 1              (self-fulfilling)
@@ -45,8 +49,23 @@ Total columns: 39 (claims table) | Output files: claims_pre_v1.parquet, claims_v
 
 [Step 6]   Train Model v2 — parameterised training window
             build_v2_training_data(window_start_year, include_pre_v1)
-            Option A (window_start_year=2022, include_pre_v1=False): v1 log only (2022–2024)
-            Option B (window_start_year=2020, include_pre_v1=True):  COVID + v1 log (2020–2024)
+
+            Option A (window_start_year=2022, include_pre_v1=False): v1 log only
+              Train + Test : 2022-01 → 2024-04  (target = model_v1_observed_outcome)
+              OOT holdout  : 2024-05 → 2024-10  (SFP-contaminated labels — see note below)
+              Excluded     : 2024-11 → 2024-12  (maturation buffer)
+
+            Option B (window_start_year=2020, include_pre_v1=True): COVID + v1 log
+              Train + Test : 2020-01 → 2024-04  (pre_ml_label for 2020–2021 rows;
+                                                  model_v1_observed_outcome for 2022–2024 rows)
+              OOT holdout  : 2024-05 → 2024-10  (same OOT as Option A)
+              Excluded     : 2024-11 → 2024-12  (maturation buffer)
+
+            ⚠ OOT note: Both options share the same OOT holdout (May–Oct 2024), which is drawn
+              from the v1 production log. Scrapped cars in this period have forced label = 1.
+              OOT AUC against model_v1_observed_outcome is therefore a biased metric.
+              Use selective-labels-corrected AUC (Build 03) for valid OOT evaluation.
+
             →  model_v2_score applied to all rows
 
 [Step 7]   Apply v2 policy: 90th percentile threshold  →  model_v2_decision
@@ -66,14 +85,60 @@ Total columns: 39 (claims table) | Output files: claims_pre_v1.parquet, claims_v
 |---|---|
 | 2014–2021 | Pre-ML era: human rules + claim handler judgment + garage assessment |
 | 2020–2021 | COVID period — claims volume and behaviour changed significantly |
-| 2022 | **Model v1 trained** on all pre-2022 data (2014–2021, including COVID era); deployed to production |
-| 2022–present | v1 in production; log data accumulates (model calls + observed outcomes) |
-| 2025 | Refresh attempt (v2): dropped pre-COVID historical data (2014–2019); trained on 2022–2024 log only → performance drops → SFP suspected → parked |
+| 2016–2021-04 | **v1 training + test data** (after applying 2-month maturation buffer and 6-month OOT) |
+| 2021-05–2021-10 | **v1 OOT holdout** — temporally latest labelled data before v1 deployment |
+| 2021-11–2021-12 | **v1 maturation buffer** — excluded; labels not yet fully confirmed at build time |
+| 2022 | **Model v1 deployed** to production; begins making scrapping decisions on live claims |
+| 2022–2024-04 | **v2 (Option A) training + test data** — v1 log only; labels SFP-contaminated |
+| 2024-05–2024-10 | **v2 OOT holdout** — drawn from v1 log; labels still SFP-contaminated (forced positive for scrapped cars) |
+| 2024-11–2024-12 | **v2 maturation buffer** — excluded from v2 training |
+| 2025 | Refresh attempt (v2): dropped pre-COVID data; trained on 2022–2024 log → performance drops → SFP suspected → project parked |
 
 > GDPR constraint: cannot use data older than 8 years at time of model build (Allianz internal policy).
 > Allianz uses case-by-case window decisions — not always the maximum allowed.
 > Enrichment data updated regularly independent of model retraining cycle.
 > Synthetic `claim_date` range: **2016-01-01 → 2024-12-31**
+
+---
+
+## Model Training Protocol
+
+Confirmed methodology from internal discussions (documented in `README.md`).
+
+| Parameter | Value | Notes |
+|---|---|---|
+| **Target maturation time** | ~2 months | Total loss outcome takes time to finalise (repair confirmed or claim settled). Most recent 2 months excluded from training. |
+| **OOT holdout** | ~6 months | Temporally latest non-excluded data. Always *after* training data — not randomly sampled. Tests generalisation to future claims. |
+| **Train / Test split** | 80 / 20 | Random split on the remaining data (after removing maturation buffer and OOT). Used for parameter learning and final performance reporting. |
+
+```
+Full data timeline (per model version)
+──────────────────────────────────────────────────────────────────────►
+│           Training + Test (80/20 random split)      │  OOT (6m) │excl│
+│                                                     │           │(2m)│
+```
+
+### Applied splits — synthetic data dates
+
+| Split | v1 (base data: 2016–2021) | v2 Option A (base: 2022–2024 log) | v2 Option B (base: 2020–2024) |
+|---|---|---|---|
+| **Maturation buffer (excluded)** | Nov–Dec 2021 | Nov–Dec 2024 | Nov–Dec 2024 |
+| **OOT holdout** | May–Oct 2021 | May–Oct 2024 | May–Oct 2024 |
+| **Train + Test (80/20)** | 2016-01 → 2021-04 | 2022-01 → 2024-04 | 2020-01 → 2024-04 |
+
+> **SFP implication for OOT evaluation:**
+> The v2 OOT holdout (May–Oct 2024) is drawn from the v1 production log period.
+> Every claim in that period was subject to v1's scrapping decisions.
+> Therefore `model_v1_observed_outcome` for OOT claims is also SFP-contaminated:
+> scrapped cars in OOT have forced label = 1 (never verified in garage).
+> **Standard OOT AUC against `model_v1_observed_outcome` is not an unbiased measure of v2's true detection ability.**
+> Build 03 (Unbiased Evaluation) must apply selective-labels correction to the OOT set, not just the training set.
+
+> **SFP implication for the maturation buffer:**
+> The 2-month exclusion window is operationally necessary for label reliability.
+> However, this also means the *most recently SFP-affected* claims (Nov–Dec 2024 for v2) are
+> invisible during both training and OOT evaluation. The loop continues to deepen in this blind spot
+> between the cut-off date and the next model deployment.
 
 ---
 
