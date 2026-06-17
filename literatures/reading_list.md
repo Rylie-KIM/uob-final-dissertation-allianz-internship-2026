@@ -1,5 +1,5 @@
 # Reading List — Identifying and Mitigating Self-Fulfilling Prophecy Loops in ML
-**MSc Data Science Dissertation · University of Bristol · Allianz UK (Operations team)**
+**MSc Data Science Dissertation · University of Bristol · Insurance A Cop. UK (Operations team)**
 All claims in scope: **motor insurance claims (UK personal lines auto)**
 
 ---
@@ -154,7 +154,7 @@ Neyman introduced the notation Y(1) and Y(0) for the outcome a unit *would* have
 $$\tau = \mathbb{E}[Y_i(1) - Y_i(0)]$$
 The fundamental problem of causal inference: we observe at most one potential outcome per unit. All identification strategies (IPW, DiD, RDD) are solutions to this problem.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Frame every analysis as a PO problem: for each motor claim, define Y(1) = fraud discovered if investigated, Y(0) = fraud discovered if not investigated. Unobserved counterfactuals are estimated via the methods in Builds 04–06.
 
 **What to write in the dissertation**
@@ -183,7 +183,7 @@ Defines the Stable Unit Treatment Value Assumption (SUTVA): no interference betw
 SUTVA: $Y_i = Y_i(W_i)$ — each unit's outcome depends only on its own treatment.
 Ignorability: $(Y(0), Y(1)) \perp W \mid X$ — conditional on features, who gets investigated is "as good as random."
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 SUTVA is plausible for motor claims (one claim being investigated should not directly affect another). Ignorability is the key assumption to defend in Build 04 — argue that postcode risk, prior claims, and product line are sufficient to satisfy it.
 
 **What to write in the dissertation**
@@ -209,7 +209,7 @@ When units are sampled with unequal probabilities, naively averaging observed ou
 $$\hat{\mu}_{IPW} = \frac{1}{n} \sum_{i=1}^{n} \frac{W_i \cdot Y_i}{\hat{e}(X_i)} + \frac{(1 - W_i) \cdot Y_i}{1 - \hat{e}(X_i)}$$
 where $\hat{e}(X_i) = P(W_i = 1 \mid X_i)$ is the propensity score (estimated investigation probability). Upweights under-investigated claims; downweights over-investigated ones.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Build 06 re-weights each motor claim by the inverse of its propensity to be investigated. Claims with low model scores that were accidentally investigated get high weights; high-score claims (routinely investigated) get low weights. This re-balanced dataset then trains a bias-corrected fraud model.
 
 **What to write in the dissertation**
@@ -235,7 +235,7 @@ The propensity score $e(x) = P(W=1 \mid X=x)$ is a balancing score: within strat
 Balancing property: $W \perp X \mid e(X)$
 Unconfoundedness given score: $(Y(0), Y(1)) \perp W \mid e(X)$
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Estimate propensity scores (probability a claim was investigated given its features) using logistic regression or XGBoost. Match investigated claims to un-investigated "controls" with similar propensity scores. Differences in fraud rate between matched pairs estimate the investigation effect.
 
 **What to write in the dissertation**
@@ -264,8 +264,8 @@ Pearl showed that causal assumptions (which variables confound which, which are 
 Back-door criterion: a set $Z$ blocks all back-door paths from $X$ to $Y$ → $P(Y \mid do(X)) = \sum_z P(Y \mid X, Z=z) P(Z=z)$
 This is exactly what Build 06 does: adjust for the confounder set $Z$ = {model score, claim features} to estimate the effect of investigation on fraud discovery.
 
-**How to apply at Allianz**
-Draw the causal DAG for the Allianz claims pipeline: model score → investigation decision → fraud discovery → label → retrain → model score (the loop). The SFP loop is the cyclic path. Use the back-door criterion to identify which variables need to be controlled when debiasing.
+**How to apply at Insurance A Cop.**
+Draw the causal DAG for the Insurance A Cop. claims pipeline: model score → investigation decision → fraud discovery → label → retrain → model score (the loop). The SFP loop is the cyclic path. Use the back-door criterion to identify which variables need to be controlled when debiasing.
 
 **What to write in the dissertation**
 Include the causal DAG as a figure in the methodology chapter. Cite Pearl (1995) when justifying the identification strategy and when explaining how DoWhy specifies causal assumptions.
@@ -294,8 +294,8 @@ When the sample used for estimation is selected non-randomly (e.g., only investi
 Inverse Mills ratio: $\lambda(z_i) = \frac{\phi(\hat{z}_i)}{\Phi(\hat{z}_i)}$
 Adding $\lambda$ as a regressor corrects for selection bias. The modern IPW approach in Build 06 is a re-parameterisation of the same correction.
 
-**How to apply at Allianz**
-The Allianz fraud model is trained only on investigated claims. Heckman's result implies every fraud rate estimate is upward-biased (investigated claims are pre-selected as likely fraudulent). Quantify this bias in Build 03 (Unbiased Evaluation) and correct it in Build 06.
+**How to apply at Insurance A Cop.**
+The Insurance A Cop. fraud model is trained only on investigated claims. Heckman's result implies every fraud rate estimate is upward-biased (investigated claims are pre-selected as likely fraudulent). Quantify this bias in Build 03 (Unbiased Evaluation) and correct it in Build 06.
 
 **What to write in the dissertation**
 Cite in the problem framing section: "the partial observability of fraud labels constitutes a sample selection problem in the sense of Heckman (1979), which induces systematic bias in any model trained on these labels."
@@ -320,7 +320,7 @@ Covers: (a) randomised experiments and their design; (b) DiD — comparing befor
 DiD estimator: $\hat{\tau}_{DiD} = (\bar{Y}_{treated,post} - \bar{Y}_{treated,pre}) - (\bar{Y}_{control,post} - \bar{Y}_{control,pre})$
 Parallel trends assumption: in the absence of treatment, both groups would have evolved in parallel.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Use DiD to estimate the causal effect of a model update (the "treatment") on fraud discovery rates. The treated group = claims scored by the new model; control group = claims still scored by the old model (if a phased rollout happened). Parallel trends is checked by plotting pre-period trends.
 
 **What to write in the dissertation**
@@ -347,11 +347,11 @@ The "regression discontinuity" design around a score threshold $c$:
 $\tau_{RDD} = \lim_{x \downarrow c} E[Y \mid X=x] - \lim_{x \uparrow c} E[Y \mid X=x]$
 Applicable when the model switches from "investigate" to "don't investigate" at a score threshold.
 
-**How to apply at Allianz**
-If Allianz uses a fixed model-score threshold to trigger investigation (e.g., score > 0.5 → investigate), RDD estimates the causal investigation effect by comparing claims just above and just below the threshold — they are near-identical except for their investigation status.
+**How to apply at Insurance A Cop.**
+If Insurance A Cop. uses a fixed model-score threshold to trigger investigation (e.g., score > 0.5 → investigate), RDD estimates the causal investigation effect by comparing claims just above and just below the threshold — they are near-identical except for their investigation status.
 
 **What to write in the dissertation**
-Cite alongside Imbens & Wooldridge (2009) as the applied econometrics standard. Use the RDD design explicitly if a score threshold exists in the Allianz pipeline; document the bandwidth selection and local linear regression approach as specified in Chapter 6 of Angrist & Pischke.
+Cite alongside Imbens & Wooldridge (2009) as the applied econometrics standard. Use the RDD design explicitly if a score threshold exists in the Insurance A Cop. pipeline; document the bandwidth selection and local linear regression approach as specified in Chapter 6 of Angrist & Pischke.
 
 ---
 
@@ -378,7 +378,7 @@ The "tip of the iceberg" problem: observed fraud rate $\hat{p}$ underestimates t
 $$\hat{p} = \frac{\text{confirmed fraud}}{\text{investigated claims}} \gg \frac{\text{confirmed fraud}}{\text{all claims}} = p^*$$
 The SFP loop magnifies this gap over successive model versions.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Use the taxonomy to classify the motor insurance fraud types in scope (staged accidents, inflated repairs, phantom injuries). Cite the "tip of the iceberg" problem as the empirical motivation for Build 03 (Unbiased Evaluation).
 
 **What to write in the dissertation**
@@ -395,7 +395,7 @@ Barocas, S. & Selbst, A. D. (2016). "Big Data's Disparate Impact." *California L
 **Citations** ≈ 2,500 (Semantic Scholar) · **Journal** *California Law Review* (top-5 US law review)
 
 **Why this paper matters**
-Provides the legal and regulatory framing for why the SFP loop is not merely a technical problem but a potential compliance liability — especially relevant to Allianz UK under FCA guidelines on fair treatment of customers and the EU AI Act.
+Provides the legal and regulatory framing for why the SFP loop is not merely a technical problem but a potential compliance liability — especially relevant to Insurance A Cop. UK under FCA guidelines on fair treatment of customers and the EU AI Act.
 
 **Summary**
 Argues that even facially neutral ML models trained on historical data can violate anti-discrimination law by perpetuating past biases. Identifies five pathways from biased training data to discriminatory outcomes: target variable definition, feature selection, proxies for protected characteristics, sample bias, and feedback effects. The last pathway is precisely the SFP loop.
@@ -403,11 +403,11 @@ Argues that even facially neutral ML models trained on historical data can viola
 **Key concept / formula**
 The disparate impact standard: a selection rate for a protected group that is less than 4/5 (80%) of the rate for the group with the highest rate is considered prima facie discriminatory (US EEOC; analogous to FCA proportionality rules in the UK).
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Check whether the motor fraud model's investigation rate varies significantly by postcode (proxy for demographics) or product line. If under-investigated segments are correlated with protected characteristics, the SFP loop may have disparate impact implications under FCA PRIN 6 (fair treatment of customers).
 
 **What to write in the dissertation**
-Cite in the ethics and regulatory chapter. Frame the SFP loop as simultaneously a technical problem (model bias) and a legal risk (disparate impact). Note Allianz UK's obligations under FCA rules as a real-world motivation for the research.
+Cite in the ethics and regulatory chapter. Frame the SFP loop as simultaneously a technical problem (model bias) and a legal risk (disparate impact). Note Insurance A Cop. UK's obligations under FCA rules as a real-world motivation for the research.
 
 ---
 
@@ -424,7 +424,7 @@ Lum, K. & Isaac, W. (2016). "To Predict and Serve?" *Significance*, 13(5), 14–
 **Citations** ≈ 509 (Semantic Scholar) · **Journal** *Significance* (joint RSS/ASA practitioner magazine, high visibility)
 
 **Why this paper matters**
-First empirical demonstration — in a domain analogous to insurance — that a model trained on biased data reinforces the patrol patterns that generated the bias. The closest published analogue to the Allianz motor insurance SFP loop.
+First empirical demonstration — in a domain analogous to insurance — that a model trained on biased data reinforces the patrol patterns that generated the bias. The closest published analogue to the Insurance A Cop. motor insurance SFP loop.
 
 **Summary**
 Applies PredPol (predictive policing software) to Oakland, CA crime data. Shows that because drug arrests reflect where police patrol (not where drugs are actually used), re-training on arrest data sends police back to the same neighbourhoods, creating a self-reinforcing loop. Communities with high historical arrest rates are systematically over-policed.
@@ -432,7 +432,7 @@ Applies PredPol (predictive policing software) to Oakland, CA crime data. Shows 
 **Key concept / formula**
 Feedback amplification: if investigation probability $\pi_t(x)$ is proportional to model score $f_t(x)$, and $f_{t+1}$ is trained on $\{y_i : \pi_t(x_i) = 1\}$, then in expectation $f_{t+1}(x) \geq f_t(x)$ for high-score regions — the model becomes increasingly confident about already-investigated areas.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Replace "drug arrests" with "fraud confirmations" and "patrol area" with "claim segment." Motor claims from certain postcodes or product lines are investigated more; fraud is discovered there; the next model version treats those segments as higher risk — regardless of the true underlying fraud rate.
 
 **What to write in the dissertation**
@@ -457,8 +457,8 @@ Models the investigation decision as a Pólya urn process. Proves that without e
 **Key concept / formula**
 Pólya urn dynamic: at each step, the probability of investigating region $r$ is $\propto n_r$ (number of past investigations there). As $n_r \to \infty$, the investigation distribution converges almost surely to a fixed composition determined by initial conditions — not by true fraud rates.
 
-**How to apply at Allianz**
-This is the theoretical model the SFP simulation (Build 01) implements. Parameterise the urn with Allianz's initial investigation rates; show how the distribution converges. The randomisation strategies in Build 05 are the interventions that break the urn dynamic.
+**How to apply at Insurance A Cop.**
+This is the theoretical model the SFP simulation (Build 01) implements. Parameterise the urn with Insurance A Cop.'s initial investigation rates; show how the distribution converges. The randomisation strategies in Build 05 are the interventions that break the urn dynamic.
 
 **What to write in the dissertation**
 Cite as the primary mathematical foundation for the SFP loop mechanism. Reproduce the Pólya urn convergence result in the theory section; show how the simulation in Build 01 recovers it empirically.
@@ -482,7 +482,7 @@ Studies the trade-off between prediction accuracy and demographic parity in algo
 **Key concept / formula**
 Optimal threshold under unconstrained utility: $\hat{t} = \arg\min_t \text{Cost}(t)$ where Cost reflects false positive and false negative costs. Under a fairness constraint (e.g., equal FPR), the constrained optimum $\hat{t}^*$ may have higher total cost — the "price of fairness."
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 When designing the randomisation policy (Build 05), consider the long-run equity impact: a policy that aggressively targets high-model-score claims may be short-run accurate but reinforces under-investigation of low-score segments. Use this framework to justify why ε-greedy / Thompson Sampling are preferred over pure exploitation.
 
 **What to write in the dissertation**
@@ -507,7 +507,7 @@ Models a loan decision system where the bank's decisions affect borrowers' futur
 **Key concept / formula**
 Long-run outcome for group $g$: $\mu_g^{(t+1)} = f(\mu_g^{(t)}, \pi_g^{(t)})$ — the next period's mean outcome is a function of the current mean and the selection rate. Feedback creates a dynamical system; static fairness criteria analyse only the current period's snapshot.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Extend the SFP simulation (Build 01) beyond 3 model versions to show the long-run trajectory of fraud discovery rates for different claim segments under different investigation policies. Use this framework to argue that a randomisation policy evaluated only at period $t=1$ may look worse but converge to a better long-run equilibrium.
 
 **What to write in the dissertation**
@@ -533,11 +533,11 @@ A prediction is "performative" if deploying it changes the distribution it was t
 Performative risk: $PR(\theta) = \mathbb{E}_{z \sim D(\theta)}[\ell(z; \theta)]$
 Standard ERM minimises $E_{z \sim D_0}[\ell(z;\theta)]$ on fixed data $D_0$ — ignoring that $D$ shifts with $\theta$. The SFP loop is the gap between these two objectives.
 
-**How to apply at Allianz**
-Argue that Allianz's fraud model is performative: its scores determine which claims are investigated, changing what fraud is discovered, changing what data trains the next version. Build 01 simulates this performative dynamic; Build 06 estimates the gap between performative risk and standard training risk.
+**How to apply at Insurance A Cop.**
+Argue that Insurance A Cop.'s fraud model is performative: its scores determine which claims are investigated, changing what fraud is discovered, changing what data trains the next version. Build 01 simulates this performative dynamic; Build 06 estimates the gap between performative risk and standard training risk.
 
 **What to write in the dissertation**
-Cite in the theory section as the formal definition of the dissertation's central concept. Include the performative risk formula in the notation table. State explicitly: "the Allianz fraud detection pipeline exhibits performative prediction in the sense of Perdomo et al. (2020)."
+Cite in the theory section as the formal definition of the dissertation's central concept. Include the performative risk formula in the notation table. State explicitly: "the Insurance A Cop. fraud detection pipeline exhibits performative prediction in the sense of Perdomo et al. (2020)."
 
 ---
 
@@ -562,7 +562,7 @@ When using ML to estimate propensity scores or outcome functions (needed for cau
 **Key concept / formula**
 The Neyman-orthogonal score $\psi(W, \theta, \eta)$ satisfies: $\partial_\eta E[\psi] = 0$ at $\eta = \eta_0$. Cross-fitted estimator: estimate $\hat{\eta}_k$ on $\mathcal{D} \setminus \mathcal{D}_k$, then evaluate $\psi$ on $\mathcal{D}_k$, average across folds.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 When estimating the effect of investigation on fraud discovery (Build 04), use cross-fitted propensity scores (from LightGBM) in a double ML estimator. This gives valid confidence intervals even though investigation propensity has a high-dimensional feature set (postcode, prior claims, product line, claim type, etc.).
 
 **What to write in the dissertation**
@@ -579,7 +579,7 @@ Sculley, D., Holt, G., Golovin, D., Davydov, E., Phillips, T., Ebner, D., Chaudh
 **Citations** ≈ 4,000+ (Google Scholar) · **Venue** *NeurIPS* (A* CORE ranking)
 
 **Why this paper matters**
-Identifies feedback loops as a first-class form of technical debt in production ML systems. Provides the systems-engineering framing for why the SFP loop is hard to detect and correct in an operational pipeline like Allianz's.
+Identifies feedback loops as a first-class form of technical debt in production ML systems. Provides the systems-engineering framing for why the SFP loop is hard to detect and correct in an operational pipeline like Insurance A Cop.'s.
 
 **Summary**
 Categorises ML technical debt as: entanglement (correlated features), hidden feedback loops, undeclared consumers, data dependency debt, and configuration debt. Feedback loops are singled out as particularly dangerous because they can cause slow but compounding degradation that is invisible in standard monitoring metrics. A model's outputs influence the world, which influences future training data.
@@ -587,8 +587,8 @@ Categorises ML technical debt as: entanglement (correlated features), hidden fee
 **Key concept / formula**
 The "data dependency debt" formulation: if model output $f(x)$ feeds into any process that generates future training data $D_{t+1}$, then the model has a "hidden feedback loop." Formally: $D_{t+1} = g(D_t, f_t)$ where $g$ is the data-generating process influenced by the model. The SFP loop is exactly this.
 
-**How to apply at Allianz**
-Use the Sculley et al. taxonomy to audit the Allianz motor claims pipeline: identify all places where model outputs influence future data (investigation decisions, adjuster prioritisation, reserve setting). Each is a potential SFP entry point. Document these as part of the Build 00 data exploration.
+**How to apply at Insurance A Cop.**
+Use the Sculley et al. taxonomy to audit the Insurance A Cop. motor claims pipeline: identify all places where model outputs influence future data (investigation decisions, adjuster prioritisation, reserve setting). Each is a potential SFP entry point. Document these as part of the Build 00 data exploration.
 
 **What to write in the dissertation**
 Cite in the problem framing section alongside Perdomo et al. (2020). Position the dissertation as applying the SFP detection framework to a specific instance of the hidden feedback loop problem identified by Sculley et al.
@@ -612,11 +612,11 @@ A training pipeline is "underspecified" when many models achieve equivalent trai
 **Key concept / formula**
 Underspecification: $\exists \theta_1 \neq \theta_2$ such that $R_{train}(\theta_1) \approx R_{train}(\theta_2)$ but $R_{test}(\theta_1) \gg R_{test}(\theta_2)$ for some OOD test distribution. For the SFP problem: the in-distribution performance is on investigated claims; the OOD distribution is all claims.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Build 03 (Unbiased Evaluation) is directly motivated by this paper: the fraud model's performance on investigated claims (where labels exist) is not representative of its performance on all claims (the full portfolio). IPS-corrected metrics estimate the true OOD performance.
 
 **What to write in the dissertation**
-Cite in Build 03. State that standard in-sample AUC is an underspecified metric for the Allianz fraud model because the test distribution (investigated claims) is a non-random subset of the deployment distribution (all claims).
+Cite in Build 03. State that standard in-sample AUC is an underspecified metric for the Insurance A Cop. fraud model because the test distribution (investigated claims) is a non-random subset of the deployment distribution (all claims).
 
 ---
 
@@ -642,7 +642,7 @@ Thompson posed the question: given two Bernoulli arms with unknown parameters, h
 At step $t$: draw $\tilde{\theta}_k \sim \text{Beta}(\alpha_k, \beta_k)$ for each arm $k$; pull arm $k^* = \arg\max_k \tilde{\theta}_k$; update $\alpha_{k^*}$ or $\beta_{k^*}$ based on outcome.
 For claim investigation: arm = claim segment; reward = fraud discovery; prior updated with each investigation outcome.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Partition motor claims into segments (by product line, postcode risk, claim type). Run Thompson Sampling across segments: occasionally investigate low-model-score claims to update the Beta posterior for that segment. Over time, this ensures no segment is permanently under-investigated due to a bad initial model.
 
 **What to write in the dissertation**
@@ -669,7 +669,7 @@ UCB1 index: $\text{UCB}_k(t) = \bar{x}_k + \sqrt{\frac{2 \ln t}{n_k}}$
 Regret bound: $E[R_T] \leq \sum_{k: \mu_k < \mu^*} \left(\frac{8 \ln T}{\Delta_k} + \left(1 + \frac{\pi^2}{3}\right) \Delta_k\right)$
 where $\Delta_k = \mu^* - \mu_k$ is the gap between arm $k$ and the best arm.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 UCB1 applied to claim investigation: each claim segment is an arm; $\bar{x}_k$ is the empirical fraud rate for that segment; $n_k$ is the number of past investigations. Claims from under-investigated segments get a UCB bonus, encouraging exploration even when the model scores them as low risk.
 
 **What to write in the dissertation**
@@ -696,7 +696,7 @@ Bayesian regret bound for Thompson Sampling:
 $\text{BayesRegret}(T) \leq \sqrt{\frac{T K \ln K}{2}}$
 where $K$ is the number of arms. This improves on UCB1's $O(\sqrt{KT \ln T})$ bound in many practical settings.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 The contextual bandit extension (Section 5 of the tutorial) is directly applicable: use claim features (amount, product line, prior claims) as context to form a personalised exploration policy rather than a single Beta distribution per segment.
 
 **What to write in the dissertation**
@@ -726,11 +726,11 @@ Proposes that a fair classifier should have equal true positive rates and equal 
 Equalised odds: $\hat{Y} \perp A \mid Y$ — prediction is independent of the protected attribute $A$ given the true label $Y$.
 Equal opportunity: $P(\hat{Y}=1 \mid A=0, Y=1) = P(\hat{Y}=1 \mid A=1, Y=1)$ — equal TPR across groups.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Check whether the SFP-corrected model achieves equal opportunity across product lines or postcode risk groups. A model that misses fraud disproportionately in certain segments (because those segments were historically under-investigated) fails this criterion. Build 06's IPW debiasing should improve equal opportunity.
 
 **What to write in the dissertation**
-Cite in the evaluation section of Build 06. Use equal opportunity as one of the post-mitigation fairness metrics alongside standard AUC and calibration. Show before/after comparison.
+Cite in the evaluation section of Build 06. Use equal opportunity as one of the post-mitigation fairness metrics alongside standard AUC. Note: the production XGBoost model is not calibrated (see README — Model Training Methodology), so raw score outputs cannot be interpreted as true probabilities. Calibration as a formal metric is therefore not evaluated unless a post-hoc calibration step (e.g., Platt scaling) is applied first. Show before/after comparison on TPR parity across segments.
 
 ---
 
@@ -749,9 +749,9 @@ The definitive textbook on algorithmic fairness; Chapter 4 covers feedback loops
 Covers: measurement, classification, causality and fairness, equal opportunity, individual fairness, and the impossibility results showing that multiple fairness criteria cannot be simultaneously satisfied. Chapter 4 ("Causality") explains why fairness interventions must address the data-generating process (the SFP loop) rather than just post-hoc adjustments to outputs.
 
 **Key concept / formula**
-The impossibility theorem (Chouldechova 2017, formalised here): calibration + equal FPR + equal FNR cannot all hold simultaneously when base rates differ across groups. This implies any fairness criterion for the Allianz model involves trade-offs that must be explicitly documented.
+The impossibility theorem (Chouldechova 2017, formalised here): calibration + equal FPR + equal FNR cannot all hold simultaneously when base rates differ across groups. This implies any fairness criterion for the Insurance A Cop. model involves trade-offs that must be explicitly documented.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Use the impossibility result to justify why a single metric (e.g., AUC alone) is insufficient for evaluating the post-mitigation model. Present the fairness trade-off frontier in Build 06 to show which criterion is prioritised and why.
 
 **What to write in the dissertation**
@@ -768,7 +768,7 @@ Corbett-Davies, S. & Goel, S. (2023). "The Measure and Mismeasure of Fairness." 
 **Citations** ≈ 700+ (Semantic Scholar) · **Journal** *JMLR* (IF ≈ 6)
 
 **Why this paper matters**
-Critical review showing that calibration, anti-classification, and classification parity all conflict with each other and with social welfare maximisation. Particularly relevant when justifying the specific fairness metric chosen for the Allianz model evaluation.
+Critical review showing that calibration, anti-classification, and classification parity all conflict with each other and with social welfare maximisation. Particularly relevant when justifying the specific fairness metric chosen for the Insurance A Cop. model evaluation.
 
 **Summary**
 Argues that commonly used fairness metrics have unintended consequences when applied naively. Proposes "conditional use accuracy equality" as a more principled criterion. Shows through the bail and lending examples that equality constraints on error rates can lead to worse outcomes for the groups being "protected."
@@ -776,11 +776,11 @@ Argues that commonly used fairness metrics have unintended consequences when app
 **Key concept / formula**
 Calibration: $P(Y=1 \mid \hat{p}(X) = p) = p$ — model probabilities match true probabilities. Anti-classification: the model does not use protected attributes. Classification parity: equal error rates. Theorem: all three cannot hold simultaneously when $P(Y=1 \mid A=0) \neq P(Y=1 \mid A=1)$.
 
-**How to apply at Allianz**
-Motor fraud base rates vary by product line and postcode. Document these base rate differences and show that perfect calibration implies different error rates across groups — this is expected and not a failure of the model. Use this to defend against naive criticism of disparate error rates.
+**How to apply at Insurance A Cop.**
+Motor fraud base rates vary by product line and postcode. Document these base rate differences and show that perfect calibration implies different error rates across groups — this is expected and not a failure of the model. Use this to defend against naive criticism of disparate error rates. **Important caveat**: the production XGBoost model is not calibrated (see README — Model Training Methodology). Raw scores are used for ranking/triage only, not as probability estimates. This means calibration cannot be directly assessed from model outputs unless Platt scaling or isotonic regression is applied post-hoc. This also affects IPS/IPW debiasing in Build 06: propensity weights derived from uncalibrated scores introduce additional bias into the reweighting — a limitation to acknowledge explicitly.
 
 **What to write in the dissertation**
-Cite in the fairness evaluation section. Use the impossibility result to frame the discussion: "following Corbett-Davies & Goel (2023), we acknowledge that calibration and classification parity cannot be simultaneously achieved given differential base rates across claim segments, and we prioritise calibration as the primary criterion."
+Cite in the fairness evaluation section. Use the impossibility result to frame the discussion: "following Corbett-Davies & Goel (2023), we acknowledge that calibration and classification parity cannot be simultaneously achieved given differential base rates across claim segments." Note that because the production model is not calibrated, formal calibration assessment requires a post-hoc calibration step not present in the current pipeline — flag this as a limitation and a direction for future work.
 
 ---
 
@@ -794,19 +794,19 @@ EIOPA factsheet: https://www.eiopa.europa.eu/document/download/b53a3b92-08cc-407
 **Impact** — Primary EU legislation (no IF; regulatory force)
 
 **Why this paper matters**
-Classifies AI systems used in insurance risk assessment and claims handling as **high-risk** (Annex III). Requires technical documentation, bias testing, human oversight, and post-deployment monitoring. Provides the regulatory mandate for solving the SFP loop: it is not merely academic but a compliance obligation for Allianz UK.
+Classifies AI systems used in insurance risk assessment and claims handling as **high-risk** (Annex III). Requires technical documentation, bias testing, human oversight, and post-deployment monitoring. Provides the regulatory mandate for solving the SFP loop: it is not merely academic but a compliance obligation for Insurance A Cop. UK.
 
 **Summary**
-The AI Act creates a risk-based framework: prohibited AI (social scoring, biometric surveillance), high-risk AI (credit, insurance, employment, law enforcement), and limited/minimal risk. For Allianz UK, the fraud scoring system is high-risk under Annex III point 5(b) (AI in insurance pricing and risk assessment) and point 6 (AI in law enforcement-adjacent tasks). Requirements include: risk management systems, data governance, transparency documentation, human oversight, accuracy and robustness requirements, and post-market monitoring.
+The AI Act creates a risk-based framework: prohibited AI (social scoring, biometric surveillance), high-risk AI (credit, insurance, employment, law enforcement), and limited/minimal risk. For Insurance A Cop. UK, the total loss scoring system is high-risk under Annex III point 5(b) (AI in insurance pricing and risk assessment) and point 6 (AI in law enforcement-adjacent tasks). Requirements include: risk management systems, data governance, transparency documentation, human oversight, accuracy and robustness requirements, and post-market monitoring.
 
 **Key concept / formula**
-Article 9 (Risk management system): continuous risk management cycle required throughout the lifecycle. Article 10 (Data governance): training data must be representative, free from errors, and complete. The SFP loop directly violates Article 10 — biased labels from selective investigation are not representative.
+Article 9 (Risk management system): continuous risk management cycle required throughout the lifecycle. Article 10 (Data governance): training data must be representative, free from errors, and complete. The SFP loop directly violates Article 10 — biased labels from the scrapping decision are not representative.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 The dissertation's SFP detection framework (Build 02) and mitigation methods (Builds 05–06) can be positioned as the technical documentation and bias-testing component required by Articles 9–10 of the AI Act. Build 03 (Unbiased Evaluation) maps to Article 15 (accuracy requirements).
 
 **What to write in the dissertation**
-Cite in the ethics and regulatory chapter. State: "the fraud scoring system at Allianz UK falls within the high-risk category under Annex III of the EU AI Act (Regulation 2024/1689), which mandates bias testing and post-deployment monitoring. This dissertation provides a technical framework for satisfying those requirements."
+Cite in the ethics and regulatory chapter. State: "the total loss scoring system at Insurance A Cop. UK falls within the high-risk category under Annex III of the EU AI Act (Regulation 2024/1689), which mandates bias testing and post-deployment monitoring. This dissertation provides a technical framework for satisfying those requirements."
 
 ---
 
@@ -828,7 +828,7 @@ Part I: the stochastic bandit framework and regret bounds. Part II: adversarial 
 Regret decomposition: $R_T = \sum_{t=1}^T \Delta_{A_t}$ where $\Delta_k = \mu^* - \mu_k$.
 The goal of any bandit algorithm is to minimise expected cumulative regret $E[R_T]$ by balancing exploration (learning about under-investigated arms) and exploitation (investigating high-fraud-probability claims).
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Use Chapter 36 to implement a contextual bandit that takes claim features as context and outputs an investigation probability. This is strictly more powerful than the segment-level Thompson Sampling in Build 05 and can be presented as a future extension.
 
 **What to write in the dissertation**
@@ -851,7 +851,7 @@ Lakkaraju, H., Kleinberg, J., Leskovec, J., Ludwig, J. & Mullainathan, S. (2017)
 **Citations** ≈ 450+ (Semantic Scholar) · **Venue** *KDD* (A* CORE ranking)
 
 **Why this paper matters**
-The Allianz total loss model is a textbook selective-labels system: the model decides whether to scrap (`decision=1`) or send to garage (`decision=0`). Repair outcomes (`garage_outcome`) are observable only for `decision=0` rows. For scrapped cars the true repair outcome is structurally absent — not missing at random. This paper provides the exact formal framework for evaluating and learning from such systems, and is the direct citation for this class of problems in the fairness and causal ML literature.
+The Insurance A Cop. total loss model is a textbook selective-labels system: the model decides whether to scrap (`decision=1`) or send to garage (`decision=0`). Repair outcomes (`garage_outcome`) are observable only for `decision=0` rows. For scrapped cars the true repair outcome is structurally absent — not missing at random. This paper provides the exact formal framework for evaluating and learning from such systems, and is the direct citation for this class of problems in the fairness and causal ML literature.
 
 **Summary**
 Studies the problem of evaluating ML models when outcomes are only observed for a subset of cases determined by the model's own decisions (or a human predecessor). Formalises **selective labels bias**: the observed accuracy on the selected subset systematically overestimates true accuracy on the full population. Proposes evaluation strategies that account for structural missingness of outcomes in the unselected group, and derives conditions under which counterfactual performance can be bounded or estimated from observational data.
@@ -861,7 +861,7 @@ Let $\hat{Y}_i$ be the model prediction and $D_i \in \{0,1\}$ the binary decisio
 $$Y_i \text{ observed} \iff D_i = 0$$
 Standard accuracy evaluated on $\{i : D_i = 0\}$ is biased because $D_i$ is a function of $\hat{Y}_i$. The paper derives conditions under which counterfactual performance on $\{i : D_i = 1\}$ can be bounded or estimated.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 `model_v1_decision = 1` → car scrapped → `garage_outcome` permanently unobservable. All model evaluation in Build 03 is implicitly selective-labels evaluation on the `decision=0` subset. Cite this paper when explaining why standard AUC on the observed log data is a biased estimate of true total loss prediction accuracy. Use the framework to formalise the oracle-absence limitation described in `synth_data_structure.md`.
 
 **What to write in the dissertation**
@@ -878,7 +878,7 @@ Bekker, J. & Davis, J. (2020). "Learning from Positive and Unlabeled Data: A Sur
 **Citations** ≈ 1,000+ (Google Scholar) · **Journal** *Machine Learning* (Springer, IF ≈ 7.5)
 
 **Why this paper matters**
-The label structure of the Allianz total loss dataset maps onto the PU learning setting. Cars sent to garage with confirmed total losses are **labeled positives** (`Y=1`, observed). Cars sent to garage that were successfully repaired are **labeled negatives** (`Y=0`). Scrapped cars have a forced label of 1 but their true repair outcome is unknown — they may have been repairable false positives. PU learning provides theory for training and evaluating classifiers under exactly this asymmetric observability structure.
+The label structure of the Insurance A Cop. total loss dataset maps onto the PU learning setting. Cars sent to garage with confirmed total losses are **labeled positives** (`Y=1`, observed). Cars sent to garage that were successfully repaired are **labeled negatives** (`Y=0`). Scrapped cars have a forced label of 1 but their true repair outcome is unknown — they may have been repairable false positives. PU learning provides theory for training and evaluating classifiers under exactly this asymmetric observability structure.
 
 **Summary**
 Comprehensive survey of learning algorithms when training data consists of labeled positives and unlabeled examples (containing both true positives and true negatives). Covers: (a) the two main assumptions — single-training-set (SCAR) vs. selected-completely-at-random; (b) methods for estimating the class prior $\pi = P(Y=1)$ from unlabeled data; (c) algorithms including biased SVM, EM-based methods, two-step methods (spy technique), and cost-sensitive re-weighting; (d) evaluation criteria under PU assumptions.
@@ -886,9 +886,9 @@ Comprehensive survey of learning algorithms when training data consists of label
 **Key concept / formula**
 PU risk decomposition: given labeled positives $\mathcal{P}$ and unlabeled $\mathcal{U}$ (true positive rate $\pi$), the risk of classifier $g$ is:
 $$R(g) = \pi \cdot R^+(g) + (1-\pi) \cdot R^-(g)$$
-where $R^+(g)$ and $R^-(g)$ are false-negative and false-positive risks. Estimating $\pi$ — the proportion of true total losses among scrapped cars — is the core estimation problem in the Allianz context.
+where $R^+(g)$ and $R^-(g)$ are false-negative and false-positive risks. Estimating $\pi$ — the proportion of true total losses among scrapped cars — is the core estimation problem in the Insurance A Cop. context.
 
-**How to apply at Allianz**
+**How to apply at Insurance A Cop.**
 Treat `model_v1_decision=1` rows (scrapped) as the "unlabeled" group: their observed label is 1, but the true fraction of genuine total losses $\pi$ is unknown. The `decision=0` rows with `outcome=1` are the labeled positives. Use PU learning methods to estimate $\hat{\pi}$, which quantifies the false-positive rate of the scrapping policy. This estimate directly informs the magnitude of SFP bias quantified in Builds 01 and 03.
 
 **What to write in the dissertation**
@@ -938,7 +938,7 @@ Cite in Build 03 (Unbiased Evaluation) and Build 06 (Causal Mitigation). Frame t
 ## PDF Download Status
 
 18 of 28 papers downloaded automatically to `literatures/p{N}.pdf`.
-The remaining 10 are behind institutional paywalls or are paid books — download via your **University of Bristol library** login or **Allianz VPN**.
+The remaining 10 are behind institutional paywalls or are paid books — download via your **University of Bristol library** login or **Insurance A Cop. VPN**.
 
 | # | File | Status | Note |
 |---|------|--------|------|
@@ -976,3 +976,164 @@ The remaining 10 are behind institutional paywalls or are paid books — downloa
 2. Search by DOI or title in the "Find a resource" search bar
 3. Sign in with your UoB student credentials
 4. Download PDF and save as `p{N}.pdf` in this folder
+
+---
+---
+
+# Application Logic Grounded in the Research Papers
+
+*Draft for review. This section turns the reading list into the analytical design for the
+application — what each component must compute and **which paper licenses each choice** —
+for the **total loss prediction** domain (not the original fraud framing). It is written
+against the real dataset (`src/data/synthetic/`) and the real policy
+(absolute scrap cutoff `score ≥ 0.872`, two-generation training v1 → v2a/v2b). The
+companion section "Application Implementation" below maps this onto the `src/` code.*
+
+## 0. The one structural fact everything else follows from
+
+The total loss pipeline is a **selective-labels system with irreversible, over-labelling
+actions**:
+
+```
+score ≥ 0.872  → scrap     → observed_outcome forced to 1   (car gone; garage NEVER verifies → oracle permanently absent)
+score <  0.872 → garage    → observed_outcome = true result  (reliable 0/1)
+```
+
+Two consequences drive the entire application:
+
+1. **The label is a function of the decision, which is a function of the score** — so any
+   metric computed on the production log is contaminated (Lakkaraju et al., **P27**;
+   Heckman, **P6**). This is *over*-labelling (forced positives), the mirror image of the
+   under-labelling in the fraud/policing analogues (Lum & Isaac **P11**, Ensign et al. **P12**).
+2. **The oracle is destroyed, not merely missing.** No post-hoc audit can recover the true
+   repair feasibility of a scrapped car. The only way to learn it is to *not scrap* — i.e.
+   route some high-score cars to the garage on purpose (the exploration cost in **P13/P19**).
+
+Every build below is one of four moves: **measure** the problem (00, 03), **prove** the
+mechanism (01), **estimate** clean effects despite the bias (02, 04), or **break** the loop
+(05, 06).
+
+## 1. Paper → application-logic map (total loss framing)
+
+| Build | Application must compute | Core papers | What changes vs. the fraud framing |
+|---|---|---|---|
+| **00 Audit** | `repair_decision` mix; scrap rate by score band; outcome observability mask (`decision==0`); enrichment join integrity | P17 (feedback as tech debt), P9 | Diagnostic is **scrap-rate monotonicity in score**, not investigation-rate; the "selection" is the irreversible scrap, recorded in `repair_decision` |
+| **01 Simulation** | Re-run the v1→v2 loop on synthetic data; show scrap rate inflates (19%→21.5%) while true feasibility is fixed | P12 (Pólya urn), P15 (performative risk), P14 (long-run) | Urn "ball" = a scrapped car forcing label=1; the fixed point is **over-scrapping**, not over-patrolling. Because the cutoff is absolute, drift shows up as *more* scrapping (not a held-constant rate) |
+| **02 Detection** | 4 falsifiable tests (below) on `model_v1_*` vs `model_v2a_*` | P15, P12, P4, P16, P27 | Step 2 becomes the **tautology check** `P(observed=1\|decision=1)=1.0`; Step 3 treats *scrapping* as the treatment |
+| **03 Unbiased eval** | Selective-labels-corrected AUC on the **garage-only** subset, reweighted to the full population; PU class-prior `π̂` for scrapped cars | P27, P3 (IPS), P6, P28 (PU), P18 | Evaluate on `decision==0` rows (true labels) and reweight by inverse P(garage); **also correct the OOT set** (it is inside the v1 log → contaminated) |
+| **04 Intervention** | Causal effect of *scrapping* on the forced-positive label; RDD at the **0.872 cutoff**; PSM/DML on propensity-to-scrap | P7, P8 (RDD/DiD), P4, P16, P5 (DAG) | The 0.872 absolute cutoff is a **textbook sharp RDD** — near-identical cars just above/below it. This is the cleanest natural experiment in the whole project |
+| **05 Randomisation** | Policy that sends a budgeted fraction of high-score cars to the garage to recover oracle labels; regret vs cost | P19/P21 (Thompson), P20/P26 (UCB), P13 (cost of fairness), P14 | Exploration is **expensive and risky** (garage fee + possibly paying a true total loss's full value) — cost-benefit must be modelled explicitly, unlike cheap re-investigation |
+| **06 Mitigation** | Debias next-gen training data: downweight/relabel forced positives; IPW for garage rows; PU-imputed counterfactuals for scrapped rows | P3, P4, P16, P5, P27, P28 | Don't just reweight — the forced `outcome=1` on scrapped rows is *wrong*, so PU relabelling/`π̂`-correction matters as much as IPW |
+| **Ethics/Reg** | Disparate-impact check by `vehicle_make`/`damage_profile`; AI Act Art. 10 data-governance argument | P10, P22, P23, P24, P25 | "Protected segment" proxy is vehicle/damage profile, not postcode; the harm is **systematically over-scrapping** certain makes |
+
+## 2. The detection logic (Build 02), restated for total loss
+
+The four steps are the application's diagnostic core. Each is a falsifiable hypothesis on the
+real columns:
+
+1. **Temporal score correlation** (P15, P12). `spearman(model_v1_score, model_v2a_score)`
+   trending → 1 across versions is the signature of approaching a *biased* performative fixed
+   point — the models agree because they share v1's self-fulfilling history, not because they
+   detect total loss better.
+2. **Label-mechanism tautology** (P6, P27). Verify `P(model_v1_observed_outcome=1 | model_v1_decision=1) = 1.0`
+   exactly (forced positive), and contrast with `P(outcome=1 | decision=0)` (garage truth).
+   The gap **is** the label noise; it is not estimable away without intervention.
+3. **Action–outcome confounding** (P4, P16). Treatment = *scrapping* (`decision`), not
+   investigation. Estimate the propensity-to-scrap `e(X)=P(decision=1|X)` from pre-decision
+   covariates (`repair_to_value_ratio`, `damage_severity`, `vehicle_age_years`, …), then the
+   naive vs. IPW/DML gap quantifies how much "scrapping → outcome=1" is mechanical rather
+   than real.
+4. **Segment blind spots** (P11, P12). Find vehicle/damage segments scrapped at near-100%:
+   these have *zero* surviving oracle labels, so the model can never be corrected there
+   without Build 05's deliberate garage routing.
+
+## 3. Why the absolute 0.872 cutoff matters to the logic
+
+Choosing an **absolute** cutoff (not a percentile) is what makes Builds 01–04 work:
+
+- **Build 01/02**: score drift is *visible* as scrap-rate inflation (a percentile rule would
+  pin the rate and hide it).
+- **Build 04 RDD**: a fixed score cutoff is a sharp discontinuity in treatment assignment —
+  Imbens & Wooldridge (**P7**) / Angrist & Pischke (**P8**) RDD applies almost verbatim, with
+  bandwidth around 0.872.
+- **Caveat to carry into Build 03/06** (P24, P22): scores are **uncalibrated** (README), so
+  using them as propensity weights injects bias. The application must either calibrate
+  (Platt/isotonic) before reweighting or report this as a limitation.
+
+---
+
+# Application Implementation
+
+*Draft for review. The recommended build order is: (1) validate each research step's logic
+in the per-step notebooks under `test/builds/00…06` (the prototypes), then (2) promote the
+stabilised logic into the `src/` application as Strategy classes. This section describes step
+(2) — how the paper-grounded logic above is realised in `src/` (see `src/DESIGN.md`,
+`src/STRUCTURE.md`).*
+
+## 1. Why a Strategy pattern, and what it buys us
+
+The application is built so the **only** thing that changes between the dissertation
+(synthetic) and Insurance A Cop. (real) runs is the injected class — never the core logic. Three swap
+axes (`src/DESIGN.md`):
+
+| Axis | Interface | Synthetic now | Real later |
+|---|---|---|---|
+| Data loading | `DataLoader` | `SyntheticDataLoader` (reads `src/data/synthetic/parquet`) | `RealDataLoader` (Insurance A Cop. Parquet + DB tables) |
+| Detection | `DetectionAlgorithm` | the 4 Build-02 steps | same algorithms, real columns |
+| Policy / correction | `InvestigationPolicy`, `TrainingDataCorrector` | Thompson / IPW+PU | same, with real cost parameters |
+
+This directly serves EU AI Act Art. 10/15 (**P25**): the detector + corrector become the
+documented, re-runnable **post-market monitoring** component, swappable per model version.
+
+## 2. Mapping the four "moves" onto the class skeleton
+
+```
+SFPPipeline (pipeline.py) — orchestrates one model-version transition (v1 → v2a)
+  │
+  ├─ DataLoader.load()                    → claims_v1_log (+ pre_v1 for v2b window)
+  │
+  ├─ SFPDetector.run(report)              → MEASURE + PROVE
+  │     algorithm/temporal_corr.py        (P15, P12)  Step 1
+  │     algorithm/label_mechanism.py      (P6, P27)   Step 2 — tautology check
+  │     algorithm/action_outcome.py       (P4, P16)   Step 3 — propensity-to-scrap
+  │     algorithm/blind_spots.py          (P11, P12)  Step 4
+  │   → DetectionReport { sfp_detected, scrap_rate_drift, auc_inflation, blind_segments }
+  │
+  └─ if report.sfp_detected:  SFPMitigator.run(report)   → BREAK
+        policy/thompson.py        (P19, P21, P13)  budgeted garage-routing of high-score cars
+        corrector/ips_pu.py       (P3, P28, P27)   IPW garage rows + PU relabel scrapped rows
+      → corrected training frame for the *next* model version
+```
+
+`ESTIMATE` (Build 04: RDD at 0.872, DiD, DML) lives as analysis modules the detector can call
+to quantify effect sizes for the report; it is not on the live mitigation path.
+
+## 3. Implementation decisions that matter
+
+- **Observability mask is a first-class column, not a `fillna`.** Build the boolean
+  `outcome_observed = (model_v1_decision == 0)` once at load time. Every estimator either
+  restricts to it (Build 03 AUC) or models it (propensity, IPW). Never impute scrapped rows'
+  outcome to 0 — and treat the forced 1 as *unverified*, per **P27/P28**.
+- **Propensity = P(scrap | X) from pre-decision covariates only.** Estimate with
+  cross-fitted LightGBM (**P16**); store `e_hat` on the frame so detector, evaluator and
+  corrector share one definition. Check overlap before any matching (**P4**).
+- **Two correctors, composed.** (a) IPW reweight garage rows back to the full distribution
+  (**P3**); (b) PU class-prior `π̂` to relabel/soft-label scrapped rows (**P28**). Report
+  `π̂` itself — it is the headline "how many repairable cars were scrapped" number for the viva.
+- **The randomisation policy needs a cost model and a kill-switch.** Garage-routing a
+  high-score car costs a real assessment + hire-car fee and risks paying a true total loss's
+  full value; the budget `B` (cars/month the business will divert) is an input, and a hard
+  floor ("never divert below score X") guards precision (**P13**, README precision ≥ 0.985).
+- **Calibrate before you weight.** Wrap the raw model in a calibration step (Platt/isotonic)
+  *inside* `DataLoader` or the corrector, since uncalibrated scores bias both IPW and any
+  probability read of the 0.872 cutoff (**P24**).
+
+## 4. Synthetic → real cutover checklist
+
+1. Implement `RealDataLoader` to yield the same schema (`synth_data_structure.md`) — map
+   Insurance A Cop. columns to `model_v{1,2}_*`, `repair_decision`, `*_observed_outcome`.
+2. Confirm the real scrap policy is the absolute 0.872 cutoff (or parameterise
+   `SCRAP_THRESHOLD`); the RDD bandwidth in Build 04 keys off it.
+3. Re-fit propensity/calibration on real data; re-check overlap and `π̂` plausibility.
+4. Everything downstream (detector, mitigator, report) runs unchanged — that is the whole
+   point of the Strategy split.
