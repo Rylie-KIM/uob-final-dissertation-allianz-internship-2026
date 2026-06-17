@@ -1,3 +1,28 @@
+> ⚠️ **WARNING — SIMULATION PURPOSE**
+>
+> This dataset is a **synthetic simulation** of real Insurance A Cop. UK motor claims data.
+> The goal is to faithfully reproduce the structure, business logic, and label mechanisms
+> of the actual production system so that the SFP detection framework can be developed and
+> validated **before access to the real data is granted**.
+>
+> Every design decision here — data splits, scrapping thresholds, enrichment join logic,
+> label mechanisms, model training windows — is chosen to match what actually happens at
+> Insurance A Cop., as understood from business discussions. When real data arrives, the synthetic
+> files (`claims_pre_v1.parquet`, `claims_v1_log.parquet`) should be swapped out and the
+> framework should run unchanged.
+>
+> **Key constraint this simulation must respect:** In the real Insurance A Cop. data, there is no
+> oracle or ground truth label. Pre-ML handler/engineer decisions (pre-model data) have
+> been disposed of under data retention policy. Even if they existed, handler decisions
+> would not constitute a clean oracle — only engineer physical inspections would, and it
+> is not always possible to distinguish which type of decision was recorded. The synthetic
+> data must therefore be designed so that all detection and analysis methods work **without
+> access to any oracle column**. Any use of `garage_outcome` (the internal DGP variable)
+> is for generation mechanics only and must not be exposed as a column or used in
+> framework logic.
+
+---
+
 # Synthetic Dataset Schema
 **UK Motor Insurance Claims — SFP Loop Research**
 **Domain: Claims Operations — Total Loss Prediction (is the car repairable?)**
@@ -43,61 +68,82 @@ Total columns: 39 (claims table) | Output files: claims_pre_v1.parquet, claims_v
             XGBClassifier.fit(X_train, y=pre_ml_label[train_rows])
             →  model_v1_score applied to all 10,000 rows (score all, train on subset)
 
-[Step 5]   Apply v1 policy: 90th percentile threshold  →  model_v1_decision
+[Step 5]   Apply v1 policy: absolute cutoff score ≥ 0.872  →  model_v1_decision
             model_v1_decision = 1  →  scrapped  →  model_v1_observed_outcome = 1              (self-fulfilling)
             model_v1_decision = 0  →  garage    →  model_v1_observed_outcome = garage_outcome  (actual result)
 
-[Step 6]   Train Model v2 — parameterised training window
-            build_v2_training_data(window_start_year, include_pre_v1)
+[Step 6]   Train Model v2 — two variants generated side by side
+            train_and_apply_v2(df, X_all, option="A")  → model_v2a_*
+            train_and_apply_v2(df, X_all, option="B")  → model_v2b_*
 
-            Option A (window_start_year=2022, include_pre_v1=False): v1 log only
+            Option A (option="A"): v1 log only — REAL Insurance A Cop. SCENARIO
               Train + Test : 2022-01 → 2024-04  (target = model_v1_observed_outcome)
               OOT holdout  : 2024-05 → 2024-10  (SFP-contaminated labels — see note below)
               Excluded     : 2024-11 → 2024-12  (maturation buffer)
+              Note: pre_ml_label unavailable at retraining time — v2 trained on v1 data only
 
-            Option B (window_start_year=2020, include_pre_v1=True): COVID + v1 log
+            Option B (option="B"): pre-ML mix + v1 log — RESEARCH COMPARISON ONLY
               Train + Test : 2020-01 → 2024-04  (pre_ml_label for 2020–2021 rows;
                                                   model_v1_observed_outcome for 2022–2024 rows)
               OOT holdout  : 2024-05 → 2024-10  (same OOT as Option A)
               Excluded     : 2024-11 → 2024-12  (maturation buffer)
+              Note: does not represent any real Allianz model.
+                    - Not v2: v2 used v1 log only (pre_ml_label was already disposed)
+                    - Not v3: v3 tried 2023+ data only, dropped pre-COVID (different approach)
+                    - Purpose: shows how SFP signal is diluted when an unbiased prior
+                      (pre_ml_label) is available alongside contaminated v1 labels.
+                      Analytical baseline for dissertation comparison only.
 
             ⚠ OOT note: Both options share the same OOT holdout (May–Oct 2024), which is drawn
               from the v1 production log. Scrapped cars in this period have forced label = 1.
               OOT AUC against model_v1_observed_outcome is therefore a biased metric.
               Use selective-labels-corrected AUC (Build 03) for valid OOT evaluation.
 
-            →  model_v2_score applied to all rows
+            →  model_v2a_score, model_v2b_score applied to all rows
 
-[Step 7]   Apply v2 policy: 90th percentile threshold  →  model_v2_decision
+[Step 7]   Apply v2 policy (same absolute cutoff ≥ 0.872) to BOTH variants
+            →  model_v2a_decision, model_v2b_decision
             Save: claims_pre_v1.parquet      (2016–2021 rows)
                   claims_v1_log.parquet      (2022–2024 rows)
                   vehicle_enrichment.parquet (enrichment lookup table)
 ```
 
-> **v3 plan:** generate `model_v2_observed_outcome` using same structure as Step 5,
-> then train v3. Shows SFP deepening over 3 generations. Optional extension.
+> **v3 status:** A v3 refresh was attempted at Insurance A Cop. (end of 2024 / early 2025) but was not deployed. The failure mode was not that precision could not reach 0.985 — a threshold can always be tightened to hold precision — but that doing so caused recall to collapse to an operationally unacceptable level. The model became too conservative to be useful: it fast-tracked only a tiny fraction of genuine total losses, undermining the core purpose of the system. This is consistent with SFP loop contamination: positive labels in training are inflated by v2's false positives, making the decision boundary imprecise, and forcing a high threshold to hold precision suppresses true positives alongside them. With no clean signal available (pre_ml_label disposed of; all training data now SFP-contaminated), v3 had nothing to learn from except the biases inherited from v1 and v2. Generating a synthetic v3 is an optional dissertation extension to show the loop deepening across three generations.
 
 ---
 
 ## Timeline Context
 
-| Period | Event |
-|---|---|
-| 2014–2021 | Pre-ML era: human rules + claim handler judgment + garage assessment |
-| 2020–2021 | COVID period — claims volume and behaviour changed significantly |
-| 2016–2021-04 | **v1 training + test data** (after applying 2-month maturation buffer and 6-month OOT) |
-| 2021-05–2021-10 | **v1 OOT holdout** — temporally latest labelled data before v1 deployment |
-| 2021-11–2021-12 | **v1 maturation buffer** — excluded; labels not yet fully confirmed at build time |
-| 2022 | **Model v1 deployed** to production; begins making scrapping decisions on live claims |
-| 2022–2024-04 | **v2 (Option A) training + test data** — v1 log only; labels SFP-contaminated |
-| 2024-05–2024-10 | **v2 OOT holdout** — drawn from v1 log; labels still SFP-contaminated (forced positive for scrapped cars) |
-| 2024-11–2024-12 | **v2 maturation buffer** — excluded from v2 training |
-| 2025 | Refresh attempt (v2): dropped pre-COVID data; trained on 2022–2024 log → performance drops → SFP suspected → project parked |
+**What is known vs. what is defined for simulation:**
 
-> GDPR constraint: cannot use data older than 8 years at time of model build (Allianz internal policy).
-> Allianz uses case-by-case window decisions — not always the maximum allowed.
+| What's known from real data | What we define for the synthetic simulation |
+|---|---|
+| Research data available from ~2018 (exact cutoff TBC) | Pre-ML era: 2016–2021 (6 years, our choice) |
+| v1 and v2 exist; exact deployment dates unknown | v1 deployed 2022 (our choice); v1 era: 2022–2024 |
+| v2 trained on v1 log only, all pre-2022 data | Simulated as: v2 trains on 2022–2024 v1 log (same mechanism, shifted dates) |
+| v3 attempted 2025; tried 2023+ data; dropped pre-COVID | Not yet simulated (details uncertain) |
+| pre_ml_label disposed (data retention) | Simulated as: pre_ml_label exists 2016–2021, then treated as inaccessible |
+
+**Synthetic event timeline (our design choices):**
+
+| Synthetic period | Event |
+|---|---|
+| 2016–2021 | Pre-ML era (synthetic): human rules + handler judgment → `pre_ml_label` generated |
+| 2020–2021 | COVID period within the simulation — claims behaviour changed |
+| 2016-01 → 2021-04 | **v1 training + test data** (80/20 split, after maturation buffer and OOT) |
+| 2021-05 → 2021-10 | **v1 OOT holdout** — temporally latest labelled data before v1 deployment |
+| 2021-11 → 2021-12 | **v1 maturation buffer** — excluded from training |
+| 2022 | **Model v1 deployed** in simulation; begins generating `model_v1_observed_outcome` |
+| 2022-01 → 2024-04 | **v2 training + test data** (v1 log only; same mechanism as real v2 trained on pre-2022 v1 log) |
+| 2024-05 → 2024-10 | **v2 OOT holdout** — drawn from v1 log; SFP-contaminated |
+| 2024-11 → 2024-12 | **v2 maturation buffer** — excluded from v2 training |
+| 2025 | **v3 refresh** — not yet simulated; real attempt used 2023+ data, dropped pre-COVID |
+
+> GDPR constraint: cannot use data older than 8 years at time of model build (internal policy).
 > Enrichment data updated regularly independent of model retraining cycle.
 > Synthetic `claim_date` range: **2016-01-01 → 2024-12-31**
+
+> **Data retention (real Insurance A Cop. constraint):** The `pre_ml_label` dataset (human-era handler decisions, 2016–2021) has been disposed of due to data protection and regulatory requirements. It is no longer available for retrospective analysis. This has two consequences: (1) v2 was trained exclusively on v1-generated data — the pre-ML signal was unavailable at retraining time; (2) there is now no biased-oracle baseline for comparing model-era decisions against the pre-ML era. See oracle discussion below.
 
 ---
 
@@ -110,6 +156,7 @@ Confirmed methodology from internal discussions (documented in `README.md`).
 | **Target maturation time** | ~2 months | Total loss outcome takes time to finalise (repair confirmed or claim settled). Most recent 2 months excluded from training. |
 | **OOT holdout** | ~6 months | Temporally latest non-excluded data. Always *after* training data — not randomly sampled. Tests generalisation to future claims. |
 | **Train / Test split** | 80 / 20 | Random split on the remaining data (after removing maturation buffer and OOT). Used for parameter learning and final performance reporting. |
+| **Minimum training rows** | 10,000 | Per model version. With a 9-year span (2016–2024), v1 occupies ~59% and v2a ~26% of total rows. To satisfy this floor for all versions, `base_features.N_ROWS` must be ≥ ~40,000. Enforced at runtime in `model.py` (`MIN_TRAIN_ROWS`). |
 
 ```
 Full data timeline (per model version)
@@ -120,11 +167,15 @@ Full data timeline (per model version)
 
 ### Applied splits — synthetic data dates
 
-| Split | v1 (base data: 2016–2021) | v2 Option A (base: 2022–2024 log) | v2 Option B (base: 2020–2024) |
+| Split | v1 (base: 2016–2021 pre-ML log) | v2a — real scenario (base: 2022–2024 v1 log) | v2b — research comparison only (base: 2020–2024) |
 |---|---|---|---|
 | **Maturation buffer (excluded)** | Nov–Dec 2021 | Nov–Dec 2024 | Nov–Dec 2024 |
 | **OOT holdout** | May–Oct 2021 | May–Oct 2024 | May–Oct 2024 |
 | **Train + Test (80/20)** | 2016-01 → 2021-04 | 2022-01 → 2024-04 | 2020-01 → 2024-04 |
+
+> **v2a vs v2b clarification:**
+> v2a represents the real scenario — v2 trained on v1 log only, with no pre-ML data available (disposed).
+> v2b is a research-only comparison scenario — it mixes pre-ML labels with v1 log to show how SFP is partially diluted when an unbiased prior exists. This does not reflect anything that happened at Allianz: the "drop pre-COVID data" consideration came from the v3 retraining attempt (2025), which tried 2023+ data only — a different approach entirely. v2b exists solely as an analytical baseline for the dissertation.
 
 > **SFP implication for OOT evaluation:**
 > The v2 OOT holdout (May–Oct 2024) is drawn from the v1 production log period.
@@ -216,24 +267,32 @@ Human decisions from 2016–2021, before v1 was deployed.
 | `pre_ml_decision` | int | 0 / 1 | 1 = handler scrapped the car (self-fulfilling); 0 = sent to garage |
 | `pre_ml_label` | int | 0 / 1 | **v1 training target.** If scrapped: always 1. If garage: actual repair outcome. Already biased — scrapped cars never verified |
 
+> **Target column nulls:** `pre_ml_label` has `NaN` only for 2022–2024 rows (by design — those rows belong to the model era, not the pre-ML era). Within the 2016–2021 rows, `pre_ml_label` is **always populated** — every claim in that period received either a handler scrap decision (label = 1) or a garage outcome (label = 0 or 1). There are no missing target values within the training window for v1.
+>
+> Similarly, `model_v1_observed_outcome` has no nulls within the 2022–2024 rows: every post-ML claim either received a model scrap decision (forced label = 1) or was sent to garage and received an observed outcome. The target column is always fully populated within each model's training window.
+
 ---
 
 ## 7. Model Columns (SFP Loop Core)
 
-Naming convention: `model_v{n}_score`, `model_v{n}_decision`, `model_v{n}_observed_outcome`
+Naming convention: `model_v{n}_score`, `model_v{n}_decision`, `model_v{n}_observed_outcome`.
 
-| Column | Type | Range / Values | Notes |
-|---|---|---|---|
-| `model_v1_score` | float | 0.00 → 1.00 | P(total_loss) from v1; `predict_proba(X)[:, 1]`; trained on `pre_ml_label` (2016–2021) |
-| `model_v1_decision` | int | 0 / 1 | Binary: 1 if `model_v1_score` ≥ 90th percentile threshold → scrapped; 0 → sent to garage |
-| `model_v1_observed_outcome` | int | 0 / 1 | **v2 training target.** If scrapped (decision=1): always 1 (self-fulfilling). If garage (decision=0): actual repair outcome |
-| `model_v2_score` | float | 0.00 → 1.00 | P(total_loss) from v2; `predict_proba(X)[:, 1]`; trained on `model_v1_observed_outcome` — SFP-biased |
-| `model_v2_decision` | int | 0 / 1 | Binary: 1 if `model_v2_score` ≥ 90th percentile threshold → scrapped; 0 → sent to garage |
+| Column | Type | Range / Values | Real-world status | Notes |
+|---|---|---|---|---|
+| `model_v1_score` | float | 0.00 → 1.00 | Superseded by v2 | P(total_loss) from v1; trained on `pre_ml_label`; exact real training dates unknown — 2016–2021 is our synthetic choice |
+| `model_v1_decision` | int | 0 / 1 | Superseded | 1 if `model_v1_score` ≥ **0.872** → scrapped; 0 → sent to garage |
+| `model_v1_observed_outcome` | int | 0 / 1 | Superseded | **v2's training target.** Scrapped cars forced to 1 (self-fulfilling); garage cars get actual repair result |
+| `model_v2a_score` | float | 0.00 → 1.00 | **Currently deployed (real v2)** | P(total_loss) from v2; trained on `model_v1_observed_outcome` (v1 log only); real v2 trained on all pre-2022 v1 data — simulated here as 2022–2024 |
+| `model_v2a_decision` | int | 0 / 1 | **Currently deployed** | 1 if `model_v2a_score` ≥ **0.872** → scrapped; 0 → garage |
+| `model_v2b_score` | float | 0.00 → 1.00 | Research comparison only — not a real model | P(total_loss) trained on mixed labels (pre_ml_label 2020–2021 + model_v1_observed_outcome 2022–2024); shows SFP dilution when unbiased prior is available; does not represent v2 (pre_ml disposed) or v3 (tried 2023+ data, different approach) |
+| `model_v2b_decision` | int | 0 / 1 | Research comparison only | 1 if `model_v2b_score` ≥ **0.872** → scrapped; 0 → garage |
 
-> **Threshold logic (v1 and v2 identical):**
+> **v3 not simulated yet.** Real v3 (attempted 2025) trained on v2 log data using 2023+ only (pre-COVID period dropped). Exact training window uncertain. Synthetic v3 generation is an optional extension — would add `model_v3_score`, `model_v3_decision` columns to demonstrate SFP deepening across three generations.
+
+> **Threshold logic (every model version identical):**
 > Model outputs probability via `predict_proba(X)[:, 1]`
-> → threshold = 90th percentile of that score
-> → binary decision: scrap (1) or send to garage (0)
+> → **absolute** decision rule: scrap iff `score ≥ 0.872` (the real cutoff, tuned for precision ≥ 0.985)
+> → this is **not** a percentile — the scrap *rate* floats with the score distribution, so v2's score drift surfaces as a higher scrap rate (the headline SFP signal).
 
 ---
 
@@ -279,10 +338,16 @@ Otherwise:
 
 ```
 pre_ml_label              ← human bias (rule-based, inconsistent)
-      ↓ v1 trains on pre_ml_label
+                             [real data: disposed; synthetic: 2016–2021, dates our choice]
+      ↓ v1 trains on pre_ml_label (exact real dates unknown; synthetic: 2016–2021)
 model_v1_observed_outcome ← ML bias (systematic, self-fulfilling)
-      ↓ v2 trains on model_v1_observed_outcome
-model_v2_decision         ← ML bias amplified (SFP deepening)
+                             [real data: pre-2022 v1 log; synthetic: 2022–2024 v1 log]
+      ↓ v2 trains on model_v1_observed_outcome ONLY (pre_ml_label disposed at retraining time)
+model_v2a_score/decision  ← ML bias amplified (SFP deepening) [CURRENTLY DEPLOYED]
+
+      ↓ v3 trains on v2 log (attempted 2025, 2023+ data only, pre-COVID dropped)
+[v3 not deployed]         ← recall collapsed when precision held at ≥ 0.985
+                             [not simulated in synthetic data yet]
 ```
 
 ---
@@ -314,6 +379,8 @@ vehicle_value         = typical_market_value_gbp × age_depreciation_factor
 repair_estimate_gbp   = part_cost_index × base_repair_cost(damage_severity, damage_location)
 repair_to_value_ratio = repair_estimate_gbp / vehicle_value
 ```
+
+> **Null handling after join:** If any row fails to match the enrichment table (e.g. rare make/model/year combination), the join produces null values for `typical_market_value_gbp` and `part_cost_index`. These are imputed rather than dropped — median imputation by `vehicle_make` group, falling back to dataset median if the group is also sparse. Derived fields (`vehicle_value`, `repair_estimate_gbp`, `repair_to_value_ratio`) are then recomputed on the imputed values. No rows are removed due to enrichment join failures.
 
 #### `age_depreciation_factor` — straight-line 8%/yr with a 10% floor
 
@@ -383,18 +450,21 @@ Otherwise   → pre_ml_decision = 0 → pre_ml_label = garage_outcome  (actual r
 
 ### Step 4 — Train Model v1
 
+Real dates unknown — 2016–2021 is our synthetic choice for the pre-ML era.
+
 ```
 model_v1       = XGBClassifier().fit(X_2016_2021, y=pre_ml_label)
+                 # real training window: unknown; synthetic: 2016–2021
 model_v1_score = model_v1.predict_proba(X_all)[:, 1]   # all 10,000 rows
 ```
 
 ### Step 5 — Apply v1 policy (SFP loop begins)
 
 ```
-threshold = 90th percentile of model_v1_score
+SCRAP_THRESHOLD = 0.872   # absolute P(total_loss) cutoff
 
-model_v1_decision = 1  if model_v1_score ≥ threshold  → repair_decision = 'scrapped_by_model'
-                  = 0  otherwise                        → repair_decision = 'sent_to_garage'
+model_v1_decision = 1  if model_v1_score ≥ SCRAP_THRESHOLD  → repair_decision = 'scrapped_by_model'
+                  = 0  otherwise                             → repair_decision = 'sent_to_garage'
 
 model_v1_observed_outcome:
   decision = 1  →  1              (self-fulfilling — garage never checked)
@@ -403,69 +473,77 @@ model_v1_observed_outcome:
 
 ### Step 6 — Train Model v2 (parameterised window)
 
+Real v2 was trained on all v1-generated data (pre-2022). In the synthetic simulation this
+corresponds to the 2022–2024 v1 log (same mechanism, different dates because we placed
+v1 deployment at 2022). Option B is not a real Allianz scenario — it is a research
+comparison baseline for the dissertation.
+
 ```python
-def build_v2_training_data(
-    pre_v1_df,            # claims_pre_v1.parquet  (2016–2021)
-    v1_log_df,            # claims_v1_log.parquet  (2022–2024)
-    window_start_year: int,
-    include_pre_v1: bool,
-) -> pd.DataFrame:
-    if include_pre_v1:
-        pre_v1_window = pre_v1_df[pre_v1_df["claim_year"] >= window_start_year]
-        return pd.concat([pre_v1_window, v1_log_df])
-    else:
-        return v1_log_df
+# Actual signature in src/data/synthetic/generate/model.py
+def train_and_apply_v2(df, X_all, option: str = "A") -> pd.DataFrame:
+    # option "A": REAL v2 scenario — v1 log only, full SFP contamination
+    # option "B": RESEARCH COMPARISON — mixes pre-ML labels with v1 log
+    #             (not v2: pre_ml disposed; not v3: v3 used 2023+ data only)
+    ...
+    # writes columns model_v2{a|b}_score and model_v2{a|b}_decision
 ```
 
 ```
---- Option A: v1 log only ---
-window_start_year = 2022,  include_pre_v1 = False
-Training rows     : 2022–2024  (target = model_v1_observed_outcome)
-
+--- Option A: v1 log only (REAL v2 scenario) ---  (suffix "a")
+Training rows : 2022–2024  (target = model_v1_observed_outcome)
+               [real v2: all pre-2022 v1 log; synthetic dates shifted]
 model_v2a = XGBClassifier().fit(X_2022_2024, y=model_v1_observed_outcome)
 
 
---- Option B: drop pre-COVID, keep 2020 onwards ---
-window_start_year = 2020,  include_pre_v1 = True
-Training rows     : 2020–2021  (target = pre_ml_label)
-                  + 2022–2024  (target = model_v1_observed_outcome)
+--- Option B: pre-ML mix + v1 log (RESEARCH COMPARISON ONLY) ---  (suffix "b")
+Training rows : 2020–2021  (target = pre_ml_label)
+              + 2022–2024  (target = model_v1_observed_outcome)
+[not a real Allianz model: pre_ml_label was disposed before v2 retraining;
+ v3's approach (2023+ data, pre-COVID dropped) was entirely different]
 
 combined_label = pre_ml_label              for 2020–2021 rows
                  model_v1_observed_outcome  for 2022–2024 rows
-
 model_v2b = XGBClassifier().fit(X_2020_2024, y=combined_label)
 
 
 --- Result ---
-Both options produce worse performance than v1.
-SFP is the common cause: self-fulfilling labels from v1 contaminate v2 training
-regardless of window choice.
+v2a is the real scenario: deployed (currently live), shows SFP symptoms —
+score drift upward and higher scrap rate than v1.
+v2b is a research baseline only: shows SFP dilution when an unbiased prior
+exists alongside contaminated labels. Both variants are scored on all rows:
 
-model_v2_score = model_v2.predict_proba(X_all)[:, 1]
+model_v2a_score = model_v2a.predict_proba(X_all)[:, 1]
+model_v2b_score = model_v2b.predict_proba(X_all)[:, 1]
 ```
 
 ### Step 7 — Apply v2 policy and save
 
 ```
-model_v2_decision = 1  if model_v2_score ≥ 90th percentile threshold
-                  = 0  otherwise
+model_v2{a,b}_decision = 1  if model_v2{a,b}_score ≥ 0.872   (absolute cutoff)
+                       = 0  otherwise
 
-Output files:
-  claims_pre_v1.parquet      2016–2021 rows
-                              columns: all base features + pre_ml_decision + pre_ml_label
-                                       + model_v1_score + model_v1_decision
-                                       + model_v1_observed_outcome
-                                       + model_v2_score + model_v2_decision
+Output files (exactly as written by run.py):
+  claims_pre_v1.parquet      2016–2021 rows — saved BEFORE v1 is trained, so it
+                              carries NO model columns.
+                              columns: base features + enrichment-derived fields
+                                       + pre_ml_decision + pre_ml_label + repair_decision
 
   claims_v1_log.parquet      2022–2024 rows
-                              columns: all base features + model_v1_score + model_v1_decision
+                              columns: base features + enrichment-derived fields
+                                       + pre_ml_decision (NaN) + pre_ml_label (NaN)
+                                       + repair_decision
+                                       + model_v1_score + model_v1_decision
                                        + model_v1_observed_outcome
-                                       + model_v2_score + model_v2_decision
-                                       (pre_ml_decision = NaN, pre_ml_label = NaN)
+                                       + model_v2a_score + model_v2a_decision
+                                       + model_v2b_score + model_v2b_decision
 
   vehicle_enrichment.parquet enrichment lookup table
                               rows: ~200 (10 makes × ~4 models × ~5 year bands)
 ```
+
+> **Note:** v1 is scored on *all* rows during generation, but only the 2022–2024
+> slice (`claims_v1_log`) is persisted with model columns. The pre-v1 file is the
+> human-era ground for v1's training target and deliberately predates any model output.
 
 ---
 
@@ -475,30 +553,40 @@ Observable checks — no oracle needed:
 
 ```
 1. Score drift:
-   mean(model_v2_score) > mean(model_v1_score)
+   mean(model_v2a_score) > mean(model_v1_score)
    → v2 assigns higher total loss probability on average
 
 2. Decision rate inflation:
-   rate(model_v2_decision=1) > rate(model_v1_decision=1)
+   rate(model_v2a_decision=1) > rate(model_v1_decision=1)
    → v2 scraps more cars than v1 did
+   (observed: v1 ≈ 19% → v2a ≈ 21.5% under the absolute 0.872 cutoff)
 
 3. Label mechanism bias:
    rate(model_v1_observed_outcome=1 | model_v1_decision=1) = 1.0   ← always (self-fulfilling)
    rate(model_v1_observed_outcome=1 | model_v1_decision=0) << 1.0  ← much lower
    → gap confirms label noise from scrapping mechanism
 
-4. Pre-ML vs v1 comparison:
+4. Pre-ML vs v1 comparison (synthetic data only — not possible on real Insurance A Cop. data):
    rate(pre_ml_label=1) vs rate(model_v1_observed_outcome=1)
    → if v1 observed rate > pre_ml rate: SFP amplified by ML
+   ⚠ pre_ml_label has been disposed of at Insurance A Cop.; this check cannot be run on
+     real data. It is available in synthetic experiments only.
 ```
 
-### What Changes When an Oracle Label Is Available
+### Oracle Data: What We Have and What We Don't
 
-In this dataset, no oracle column exists — `garage_outcome` is used only internally during
-generation and is never saved. All four SFP checks above operate on **observed** labels only.
+**In the synthetic dataset:** `garage_outcome` is the true oracle — it is generated by the DGP and used internally to produce realistic labels, but it is deliberately not saved to any output file. This simulates the real-world constraint.
 
-The table below shows how each check shifts in meaning when a true ground-truth label is available,
-and why the absence of oracle values constitutes a structural limitation of real-world SFP analysis.
+**In the real Insurance A Cop. data:** There is genuinely no oracle. The original plan was to use `pre_ml_label` (human agent decisions, 2016–2021) as a biased-but-independent reference point — not a true oracle, since human handlers also scrapped cars without garage verification (self-fulfilling), but at least a different signal from the ML model. That data has since been disposed of due to data protection regulations. What remains is exclusively the v1 and v2 production logs.
+
+This means:
+- For scrapped cars (decision = 1), the true repair outcome is **permanently unknown** across all eras
+- There is no pre-ML baseline to compare model-era behaviour against
+- All SFP detection must operate solely on observed production log data
+
+The table below shows how each SFP check shifts in meaning when a true oracle is available versus not.
+
+**Why the absence of oracle values matters:**
 
 | Check | Without oracle (this dataset) | With oracle (ground truth) |
 |---|---|---|
@@ -507,16 +595,11 @@ and why the absence of oracle values constitutes a structural limitation of real
 | **Label mechanism bias** | `rate(observed=1 \| decision=1) = 1.0` by construction (tautological); `rate(observed=1 \| decision=0)` unobservable | True precision and recall computable: `Precision = rate(oracle=1 \| decision=1)`, `Recall = rate(decision=1 \| oracle=1)`; counterfactual harm quantifiable as `rate(oracle=1 \| decision=0)` — claims that were scrapped but were actually repairable |
 | **Pre-ML vs v1 comparison** | Both distributions are themselves biased observed labels | AUC against oracle computable per model version; if `AUC(v2, oracle) < AUC(v1, oracle)` despite v2 training on more data: SFP degradation confirmed |
 
-**Core distinction:** without oracle, the four checks measure *symptoms* of SFP (anomalous
-patterns in observed data). With oracle, they measure *actual harm* — false positive rates,
-recall loss, and counterfactual outcomes for cases the model chose not to investigate.
+**Core distinction:** without oracle, the four checks measure *symptoms* of SFP (anomalous patterns in observed data). With oracle, they measure *actual harm* — false positive rates, recall loss, and counterfactual outcomes for cases the model chose not to investigate.
 
-**Implication for this research:** The absence of oracle labels (i.e., unknown true repair
-outcomes for scrapped cars) is not a data quality gap — it is the defining structural feature
-of the SFP problem. The model's own decision determines which outcomes are observable, making
-unbiased evaluation fundamentally impossible without external intervention (randomisation,
-audits, or natural experiments). This limitation will be discussed in the dissertation as a
-core constraint on any post-hoc SFP detection method that relies solely on production log data.
+**Label framing:** The problem here is **contaminated labels**, not missing labels. Every claim in the training window has a label — but labels for scrapped cars are structurally forced to 1 by the model's own past decisions, not by independent verification. This distinction matters for methodology: missing-label techniques (semi-supervised learning, imputation) are the wrong tool. The right frame is selective labels / label contamination, where observed outcomes are a biased subset of true outcomes depending on which action was taken.
+
+**Implication for this research:** The absence of oracle labels is not a data quality gap — it is the defining structural feature of the SFP problem, and in the real Insurance A Cop. case it is compounded by the regulatory disposal of the pre-ML data. The model's own decisions determine which outcomes are ever observed, and the historical human-era decisions that might have served as a reference are gone. This leaves the SFP detection framework with no ground truth to compare against — it must identify the loop from symptoms alone: score drift, decision rate inflation, and label mechanism bias detectable in the production log itself. This constraint will be discussed in the dissertation as the core motivation for detection methods that do not require oracle access.
 
 ---
 
@@ -539,7 +622,7 @@ core constraint on any post-hoc SFP detection method that relies solely on produ
 ## Enrichment Table (`vehicle_enrichment.parquet`)
 
 Separate lookup table joined on (`vehicle_make`, `vehicle_model`, `manufacture_year`).
-Updated regularly at Allianz independent of model retraining cycle.
+Updated regularly at Insurance A Cop. independent of model retraining cycle.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -584,14 +667,20 @@ repair_to_value_ratio   = repair_estimate_gbp / vehicle_value
 | Boolean | 4 |
 | Numerical | 9 |
 | Pre-ML era | 2 |
-| Model columns | 5 |
-| **Total** | **36** |
+| Model columns | 7 (v1 ×3 + v2a ×2 + v2b ×2) |
+| **Total** | **38** |
+
+> Counts are conceptual claims-table fields. The saved files differ by design:
+> `claims_pre_v1` omits the 7 model columns (saved before training);
+> `claims_v1_log` includes them. Both also carry the 6 enrichment-derived fields
+> (`manufacture_year`, `typical_market_value_gbp`, `part_cost_index`,
+> `vehicle_value`, `repair_estimate_gbp`, `repair_to_value_ratio`).
 
 ---
 
-## Notes on Real Data Format (for when Allianz data arrives)
+## Notes on Real Data Format (for when Insurance A Cop. data arrives)
 
 - Format: **Parquet files + database tables** (not CSV)
 - Code style: scripts over notebooks for reproducible pipelines; use **ruff** linter
 - PII handling required for customer data columns once NDA signed
-- Synthetic data is a placeholder — swap `claims_pre_v1.parquet` and `claims_v1_log.parquet` with real Allianz data; framework runs unchanged
+- Synthetic data is a placeholder — swap `claims_pre_v1.parquet` and `claims_v1_log.parquet` with real Insurance A Cop. data; framework runs unchanged
