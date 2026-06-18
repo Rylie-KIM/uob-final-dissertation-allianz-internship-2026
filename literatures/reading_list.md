@@ -4,6 +4,20 @@ All claims in scope: **motor insurance claims (UK personal lines auto)**
 
 ---
 
+## Paper Category Framework
+
+These papers are selected to address the **motor insurance total loss prediction service's Self-Fulfilling Prophecy (SFP) Loop problem** — where the model's own scrapping decisions force labels on future training data, causing each retrained model version to amplify the previous version's over-confident predictions.
+
+Each paper is classified into one or more of the following categories. A single paper may belong to multiple categories.
+
+**1. Define** — Papers that explain *what* the SFP Loop problem is and *why* it occurs at a mathematical or structural level. These help the Claims Operations team understand why the refreshed model's performance degrades over successive retraining cycles.
+
+**2. Detect** — Papers that provide a method or observable signal for detecting the SFP Loop in a deployed service. These methods are candidates for implementation in the detection framework (Build 02).
+
+**3. Mitigate** — Papers that propose a concrete method for reducing or breaking the SFP Loop. These methods are candidates for implementation in the mitigation pipeline (Builds 05–06).
+
+---
+
 ## SFP Loop: Fraud Detection vs. Total Loss Prediction — Domain Comparison
 
 *This table was written to clarify domain-specific methodological choices for the paper.
@@ -896,38 +910,76 @@ Cite in Build 03 (Unbiased Evaluation) and Build 06 (Causal Mitigation). Frame t
 
 ---
 
+## Paper Role Classification
+
+> A paper can belong to multiple categories. See the **Paper Category Framework** section at the top for category definitions.
+> "Key limitation for Allianz" explains why the paper alone cannot fully solve the Fast Track Total Loss SFP problem.
+
+| # | Short Title | Define | Detect | Mitigate | Key limitation for Allianz total loss problem |
+|---|-------------|:------:|:------:|:--------:|------------------------------------------------|
+| P1 | Potential Outcomes | ✓ | | | Abstract notation only — no estimation strategy; requires a companion estimator (→ P3, P4) |
+| P2 | Estimating Causal Effects | ✓ | | | Assumes ignorability holds; cannot fix it when unobservables drive scrapping (→ P6) |
+| P3 | IPS Estimator | | ✓ | ✓ | Assumes known propensity; under hard threshold e(x)∈{0,1} → degenerate weights; soft-score workaround needed |
+| P4 | Propensity Score | | ✓ | ✓ | Matching on propensity doesn't recover oracle for scrapped cars — overlap fails where e(x)=1 (→ P27) |
+| P5 | Causal Diagrams / DAGs | ✓ | | | Acyclic assumption; SFP loop is a *cycle* — standard DAG identification breaks; dynamic causal modelling needed |
+| P6 | Sample Selection Bias | ✓ | ✓ | ✓ | Assumes label is *missing* when unselected; in our case it is *forced to 1* — Heckman correction addresses missingness, not contamination |
+| P7 | Econometrics of Program Eval. | | ✓ | | Survey — parallel trends (DiD) and continuity (RDD) assumptions must be separately verified on our data |
+| P8 | Mostly Harmless Econometrics | | ✓ | | Textbook — RDD requires smooth covariate distribution around 0.872; score bunching near threshold may violate this |
+| P9 | Fraud Detection Survey | ✓ | | | Domain is fraud, not total loss; under-labelling framing doesn't map to our over-labelling / forced-positive structure |
+| P10 | Big Data's Disparate Impact | ✓ | | | Legal/regulatory framing only; no algorithmic correction; UK FCA rules differ from US EEOC disparate impact standard |
+| P11 | To Predict and Serve? | ✓ | ✓ | | Empirical analogy (policing ≈ scrapping) but labels are *missing* there vs. *forced* here; oracle is recoverable in policing, not in total loss |
+| P12 | Runaway Feedback Loops | ✓ | ✓ | ✓ | Remedies assume cheap exploration; garage routing is expensive — cost-benefit not modelled (→ P13, P19) |
+| P13 | Cost of Fairness (KDD '17) | ✓ | | ✓ | Formalises the trade-off but no closed-form solution for our precision ≥ 0.985 hard constraint |
+| P14 | Delayed Impact of Fair ML | ✓ | ✓ | ✓ | Requires knowing the "benefit function" mapping selection → future outcome; permanently scrapped cars have no observable future outcome |
+| P15 | Performative Prediction | ✓ | ✓ | | Theory only — proves the loop exists and characterises convergence; provides no detection test or debiasing algorithm |
+| P16 | Double/Debiased ML | | ✓ | ✓ | Requires overlap (common support); high-score cars scrapped at near-100% rate → no overlap → DML breaks in the tail |
+| P17 | Hidden Technical Debt in ML | ✓ | | | Taxonomy paper — identifies feedback loops as tech debt but provides no quantification or correction method |
+| P18 | Underspecification in ML | ✓ | ✓ | | Diagnoses the problem but solution ("stress tests") is underspecified for structured selection bias with forced labels |
+| P19 | Thompson Sampling | | | ✓ | Original Beta-Bernoulli formulation; no cost model — routing a car to garage is not free (→ P13 for cost-benefit) |
+| P20 | UCB1 | | | ✓ | Frequentist, no prior — cannot incorporate domain knowledge about cost asymmetry; precision floor not modelled |
+| P21 | Tutorial on Thompson Sampling | | | ✓ | Contextual extension assumes rewards are observed; scrapped cars' true outcomes are never observed even after routing |
+| P22 | Equality of Opportunity | ✓ | ✓ | ✓ | Post-processing threshold adjustment assumes calibrated scores; production model is uncalibrated → cannot apply directly |
+| P23 | Fairness and ML (book) | ✓ | | | Impossibility theorem shows no single metric resolves all fairness criteria — does not resolve which criterion to prioritise |
+| P24 | Measure and Mismeasure of Fairness | ✓ | ✓ | | Proposes conditional use accuracy equality but assumes calibrated model; our uncalibrated XGBoost violates this precondition |
+| P25 | EU AI Act | ✓ | | | Regulatory mandate — specifies *what* must be achieved (Art. 9–10), not *how* to achieve it technically |
+| P26 | Bandit Algorithms (book) | | | ✓ | General theory — contextual bandit (Ch. 36) assumes reward is always observed; we permanently lose oracle for scrapped cases |
+| P27 | Selective Labels Problem | ✓ | ✓ | ✓ | Contraction requires multiple concurrent heterogeneous decision-makers; we have a single sequential model pipeline — precondition fails |
+| P28 | PU Learning Survey | ✓ | ✓ | ✓ | SCAR assumption definitively violated; SAR methods need to estimate e(x) — our advantage is e(x) is known, but SCAR-based prior estimators (e.g. c = Pr(s=1)/α) are invalid |
+
+---
+
 ## Quick Reference Table
 
-| # | First Author | Year | Short Title | Venue | URL | ~Citations |
-|---|-------------|------|-------------|-------|-----|-----------|
-| P1 | Neyman | 1923/1990 | Potential outcomes | Stat. Science | doi:10.1214/ss/1177012031 | 3,000 |
-| P2 | Rubin | 1974 | Estimating causal effects | J. Educ. Psychol. | doi:10.1037/h0037350 | 9,800 |
-| P3 | Horvitz & Thompson | 1952 | IPS estimator | JASA | doi:10.1080/01621459.1952.10483446 | 5,000 |
-| P4 | Rosenbaum & Rubin | 1983 | Propensity score | Biometrika | doi:10.1093/biomet/70.1.41 | 25,000 |
-| P5 | Pearl | 1995 | Causal diagrams / DAGs | Biometrika | doi:10.1093/biomet/82.4.669 | 5,000 |
-| P6 | Heckman | 1979 | Sample selection bias | Econometrica | doi:10.2307/1912352 | 29,000 |
-| P7 | Imbens & Wooldridge | 2009 | Econometrics of program eval. | J. Econ. Lit. | doi:10.1257/jel.47.1.5 | 8,000 |
-| P8 | Angrist & Pischke | 2009 | Mostly Harmless Econometrics | Princeton UP | press.princeton.edu | 30,000 |
-| P9 | Phua et al. | 2010 | Fraud detection survey | arXiv | arxiv.org/abs/1009.6119 | 795 |
-| P10 | Barocas & Selbst | 2016 | Big Data's Disparate Impact | CA Law Rev. | ssrn.com/abstract=2477899 | 2,500 |
-| P11 | Lum & Isaac | 2016 | To Predict and Serve? | Significance | doi:10.1111/j.1740-9713.2016.00960.x | 509 |
-| P12 | Ensign et al. | 2018 | Runaway Feedback Loops | FAccT | arxiv.org/abs/1706.09847 | 650 |
-| P13 | Corbett-Davies et al. | 2017 | Cost of Fairness (KDD '17) | KDD | dl.acm.org/doi/10.1145/3097983.3098095 | 1,445 |
-| P14 | Liu et al. | 2018 | Delayed Impact of Fair ML | ICML | arxiv.org/abs/1803.04383 | 491 |
-| P15 | Perdomo et al. | 2020 | Performative Prediction | ICML | arxiv.org/abs/2002.06673 | 325 |
-| P16 | Chernozhukov et al. | 2018 | Double/Debiased ML | Econometrics J. | doi:10.1111/ectj.12097 | 6,000 |
-| P17 | Sculley et al. | 2015 | Hidden Technical Debt in ML | NeurIPS | proceedings.neurips.cc | 4,000 |
-| P18 | D'Amour et al. | 2022 | Underspecification in ML | JMLR | arxiv.org/abs/2011.03395 | 900 |
-| P19 | Thompson | 1933 | Thompson Sampling | Biometrika | doi:10.1093/biomet/25.3-4.285 | 3,000 |
-| P20 | Auer et al. | 2002 | UCB1 bandit algorithm | ML journal | doi:10.1023/A:1013689704352 | 7,000 |
-| P21 | Russo et al. | 2018 | Tutorial on Thompson Sampling | FnT-ML | doi:10.1561/2200000070 | 3,000 |
-| P22 | Hardt et al. | 2016 | Equality of Opportunity | NeurIPS | arxiv.org/abs/1610.02413 | 5,000 |
-| P23 | Barocas, Hardt & Narayanan | 2023 | Fairness and ML (book) | MIT Press | fairmlbook.org | 4,000 |
-| P24 | Corbett-Davies & Goel | 2023 | Measure and Mismeasure of Fairness | JMLR | arxiv.org/abs/1808.00023 | 700 |
-| P25 | EU Parliament | 2024 | EU AI Act | EU OJ | eur-lex.europa.eu | — |
-| P26 | Lattimore & Szepesvári | 2020 | Bandit Algorithms (book) | Cambridge UP | doi:10.1017/9781108571401 | 1,500 |
-| P27 | Lakkaraju et al. | 2017 | Selective Labels Problem | KDD | dl.acm.org/doi/10.1145/3097983.3098066 | 450 |
-| P28 | Bekker & Davis | 2020 | PU Learning survey | Machine Learning | doi:10.1007/s10994-020-05877-5 | 1,000 |
+| # | First Author | Year | Short Title | Role | Venue | URL | ~Citations |
+|---|-------------|------|-------------|------|-------|-----|-----------|
+| P1 | Neyman | 1923/1990 | Potential outcomes | Define | Stat. Science | doi:10.1214/ss/1177012031 | 3,000 |
+| P2 | Rubin | 1974 | Estimating causal effects | Define | J. Educ. Psychol. | doi:10.1037/h0037350 | 9,800 |
+| P3 | Horvitz & Thompson | 1952 | IPS estimator | Detect + Mitigate | JASA | doi:10.1080/01621459.1952.10483446 | 5,000 |
+| P4 | Rosenbaum & Rubin | 1983 | Propensity score | Detect + Mitigate | Biometrika | doi:10.1093/biomet/70.1.41 | 25,000 |
+| P5 | Pearl | 1995 | Causal diagrams / DAGs | Define | Biometrika | doi:10.1093/biomet/82.4.669 | 5,000 |
+| P6 | Heckman | 1979 | Sample selection bias | Define + Detect + Mitigate | Econometrica | doi:10.2307/1912352 | 29,000 |
+| P7 | Imbens & Wooldridge | 2009 | Econometrics of program eval. | Detect | J. Econ. Lit. | doi:10.1257/jel.47.1.5 | 8,000 |
+| P8 | Angrist & Pischke | 2009 | Mostly Harmless Econometrics | Detect | Princeton UP | press.princeton.edu | 30,000 |
+| P9 | Phua et al. | 2010 | Fraud detection survey | Define | arXiv | arxiv.org/abs/1009.6119 | 795 |
+| P10 | Barocas & Selbst | 2016 | Big Data's Disparate Impact | Define | CA Law Rev. | ssrn.com/abstract=2477899 | 2,500 |
+| P11 | Lum & Isaac | 2016 | To Predict and Serve? | Define + Detect | Significance | doi:10.1111/j.1740-9713.2016.00960.x | 509 |
+| P12 | Ensign et al. | 2018 | Runaway Feedback Loops | Define + Detect + Mitigate | FAccT | arxiv.org/abs/1706.09847 | 650 |
+| P13 | Corbett-Davies et al. | 2017 | Cost of Fairness (KDD '17) | Define + Mitigate | KDD | dl.acm.org/doi/10.1145/3097983.3098095 | 1,445 |
+| P14 | Liu et al. | 2018 | Delayed Impact of Fair ML | Define + Detect + Mitigate | ICML | arxiv.org/abs/1803.04383 | 491 |
+| P15 | Perdomo et al. | 2020 | Performative Prediction | Define + Detect | ICML | arxiv.org/abs/2002.06673 | 325 |
+| P16 | Chernozhukov et al. | 2018 | Double/Debiased ML | Detect + Mitigate | Econometrics J. | doi:10.1111/ectj.12097 | 6,000 |
+| P17 | Sculley et al. | 2015 | Hidden Technical Debt in ML | Define | NeurIPS | proceedings.neurips.cc | 4,000 |
+| P18 | D'Amour et al. | 2022 | Underspecification in ML | Define + Detect | JMLR | arxiv.org/abs/2011.03395 | 900 |
+| P19 | Thompson | 1933 | Thompson Sampling | Mitigate | Biometrika | doi:10.1093/biomet/25.3-4.285 | 3,000 |
+| P20 | Auer et al. | 2002 | UCB1 bandit algorithm | Mitigate | ML journal | doi:10.1023/A:1013689704352 | 7,000 |
+| P21 | Russo et al. | 2018 | Tutorial on Thompson Sampling | Mitigate | FnT-ML | doi:10.1561/2200000070 | 3,000 |
+| P22 | Hardt et al. | 2016 | Equality of Opportunity | Define + Detect + Mitigate | NeurIPS | arxiv.org/abs/1610.02413 | 5,000 |
+| P23 | Barocas, Hardt & Narayanan | 2023 | Fairness and ML (book) | Define | MIT Press | fairmlbook.org | 4,000 |
+| P24 | Corbett-Davies & Goel | 2023 | Measure and Mismeasure of Fairness | Define + Detect | JMLR | arxiv.org/abs/1808.00023 | 700 |
+| P25 | EU Parliament | 2024 | EU AI Act | Define | EU OJ | eur-lex.europa.eu | — |
+| P26 | Lattimore & Szepesvári | 2020 | Bandit Algorithms (book) | Mitigate | Cambridge UP | doi:10.1017/9781108571401 | 1,500 |
+| P27 | Lakkaraju et al. | 2017 | Selective Labels Problem | Define + Detect + Mitigate | KDD | dl.acm.org/doi/10.1145/3097983.3098066 | 450 |
+| P28 | Bekker & Davis | 2020 | PU Learning survey | Define + Detect + Mitigate | Machine Learning | doi:10.1007/s10994-020-05877-5 | 1,000 |
 
 ---
 
