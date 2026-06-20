@@ -948,6 +948,21 @@ Cite in Build 03 (Unbiased Evaluation) and Build 06 (Causal Mitigation). Frame t
 
 ---
 
+## Problem Type Taxonomy — Which Existing Framework Fits?
+
+*Cross-reference: `problem.md` §2.4. For the full formal derivation (notation, label generation mechanism, SCAR violation proof), see `problem.md` §2–2.6.*
+
+| Candidate Framework | What Fits | What Doesn't / What's Missing |
+|---------------------|-----------|-------------------------------|
+| **Selective Labels (P27, Lakkaraju et al. 2017)** | The structure where $D_i$ determines label availability; evaluation on the $\{D_i=0\}$ subset being biased | When $D_i=1$, the label is not NA but forced to 1 — this is "contamination," not "missingness." The Contraction technique requires multiple simultaneous heterogeneous decision-makers and does not apply directly to the sequential model-version structure (see `notes/p27.md` §3-2) |
+| **PU Learning (P28, Bekker & Davis 2020)** | The "contaminated label" structure where it is unknown whether $D_i=1$ rows are true positives — a more accurate mapping | **SCAR is definitively violated** (see `problem.md` §2.6). The correct assumption is **structured SAR**: the propensity score $e(x) = \Pr(D=1 \mid X=x, Y=1) \approx \mathbb{1}[\hat{f}(x) \geq 0.872]$ is a deterministic step function of $x$ — the labelling probability is 0 or 1 depending entirely on features, not constant. SCAR-based prior estimation ($c = \Pr(s=1)/\alpha$) is therefore invalid. However, because the labelling mechanism is *known* (the model threshold), $e(x)$ can be computed directly, enabling IPS-corrected evaluation and debiased training despite the violation. |
+| **Performative Prediction (P15, Perdomo et al. 2020)** | Precisely matches the core mechanism where the model's predictions change the data distribution itself — the best theoretical backbone for explaining the loop dynamics | Does not provide concrete evaluation or correction algorithms — answers "why the loop forms," not "how to fix it" |
+| **Runaway Feedback Loops (P12, Ensign et al. 2018)** | Structurally identical to the "see more → find more → send more" loop in predictive policing | The proposed remedies (random exploration/audits) are highly costly in our domain (sending a car to the garage is itself a cost) — cost-benefit analysis required in Build 05 |
+
+**Working conclusion:** Our problem is most accurately characterised as a **performative prediction loop operating over PU-contaminated labels**. P27 remains a valid supporting tool for explaining why evaluation is biased, but it is not the primary explanation of the core mechanism (label contamination + self-reinforcement). This working assumption may be revised as further papers are read.
+
+---
+
 ## Quick Reference Table
 
 | # | First Author | Year | Short Title | Role | Venue | URL | ~Citations |

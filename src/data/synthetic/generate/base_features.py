@@ -1,30 +1,16 @@
-# Step 1 — Generate base claim features for all 10,000 rows.
+# Step 1 — Generate base claim features for all rows.
+import logging
 
 import numpy as np
 import pandas as pd
 
-SEED = 42
-N_ROWS = 10_000
+from generate.config import SEED, N_ROWS
+from generate.enrichment import VEHICLE_MODELS, DAMAGE_SEVERITIES, DAMAGE_LOCATIONS
 
-VEHICLE_MODELS = {
-    "Ford":       ["Fiesta", "Focus", "Mondeo", "Kuga", "Transit"],
-    "BMW":        ["1 Series", "3 Series", "5 Series", "X3", "X5"],
-    "Toyota":     ["Yaris", "Corolla", "RAV4", "Camry"],
-    "Volkswagen": ["Polo", "Golf", "Passat", "Tiguan"],
-    "Vauxhall":   ["Corsa", "Astra", "Mokka", "Insignia"],
-    "Audi":       ["A3", "A4", "A6", "Q3", "Q5"],
-    "Honda":      ["Jazz", "Civic", "HR-V", "CR-V"],
-    "Mercedes":   ["A-Class", "C-Class", "E-Class", "GLC"],
-    "Nissan":     ["Micra", "Juke", "Qashqai", "Leaf"],
-    "Hyundai":    ["i10", "i20", "i30", "Tucson"],
-}
-
-DAMAGE_TYPES     = ["collision", "flood", "fire", "vandalism", "theft_damage"]
-DAMAGE_LOCATIONS = ["front", "rear", "side", "roof", "multiple"]
-DAMAGE_SEVERITIES = ["minor", "moderate", "severe"]
-AGENT_CHANNELS   = ["online", "broker", "direct", "app", "phone"]
-COVERAGE_TYPES   = ["third_party", "third_party_fire_theft", "comprehensive"]
-VEHICLE_TYPES    = ["Sedan", "SUV", "Hatchback", "Estate", "Van", "Motorbike"]
+DAMAGE_TYPES   = ["collision", "flood", "fire", "vandalism", "theft_damage"]
+AGENT_CHANNELS = ["online", "broker", "direct", "app", "phone"]
+COVERAGE_TYPES = ["third_party", "third_party_fire_theft", "comprehensive"]
+VEHICLE_TYPES  = ["Sedan", "SUV", "Hatchback", "Estate", "Van", "Motorbike"]
 
 
 def _generate_identifiers(rng: np.random.Generator) -> pd.DataFrame:
@@ -49,7 +35,7 @@ def _generate_dates(rng: np.random.Generator) -> pd.DataFrame:
     total_days = (end - start).days
 
 
-    day_offsets = rng.integers(0, total_days, size=N_ROWS)
+    day_offsets = rng.integers(0, total_days, size=N_ROWS) 
     claim_dates = pd.to_datetime([start + pd.Timedelta(days=int(d)) for d in day_offsets])
 
     # incident_date <= claim_date; delay skewed toward 0
@@ -106,17 +92,15 @@ def _generate_booleans(rng: np.random.Generator, claim_dates: pd.Series) -> pd.D
 
 
 def _generate_numericals(rng: np.random.Generator) -> pd.DataFrame:
-    vehicle_age = rng.integers(0, 21, size=N_ROWS) 
-    mileage     = rng.integers(0, 200_001, size=N_ROWS)
-    driver_age  = np.clip(rng.normal(loc=42, scale=15, size=N_ROWS).astype(int), 17, 85)
-    prior_claims_count   = rng.poisson(lam=0.8, size=N_ROWS)
-    customer_tenure      = rng.integers(0, 21, size=N_ROWS)
+    mileage            = rng.integers(0, 200_001, size=N_ROWS)
+    driver_age         = np.clip(rng.normal(loc=42, scale=15, size=N_ROWS).astype(int), 17, 85)
+    prior_claims_count = rng.poisson(lam=0.8, size=N_ROWS)
+    customer_tenure    = rng.integers(0, 21, size=N_ROWS)
 
     return pd.DataFrame({
-        "vehicle_age_years":    vehicle_age,
-        "mileage":              mileage,
-        "driver_age":           driver_age,
-        "prior_claims_count":   prior_claims_count,
+        "mileage":               mileage,
+        "driver_age":            driver_age,
+        "prior_claims_count":    prior_claims_count,
         "customer_tenure_years": customer_tenure,
     })
 
@@ -132,7 +116,24 @@ def generate_base_features() -> pd.DataFrame:
 
     df = pd.concat([identifiers, dates, categoricals, booleans, numericals], axis=1)
 
-    # manufacture_year derived here; used as enrichment join key
-    df["manufacture_year"] = pd.to_datetime(df["claim_date"]).dt.year - df["vehicle_age_years"]
+    claim_years = pd.to_datetime(df["claim_date"]).dt.year.values
+
+    # manufacture_year: user-reported at claim intake (DVLA or V5C document)
+    # Clamped to enrichment table range (2004-2024) so join always succeeds.
+    mfr_low  = np.maximum(claim_years - 20, 2004)
+    mfr_high = np.minimum(claim_years, 2024)
+    df["manufacture_year"] = np.array([
+        int(rng.integers(lo, hi + 1)) for lo, hi in zip(mfr_low, mfr_high)
+    ])
+
+    # registration_year: when the car was first registered (DVLA plate issue date)
+    # 0-2 years after manufacture (accounts for dealer stock and import lag)
+    reg_offset = rng.integers(0, 3, size=N_ROWS)
+    df["registration_year"] = np.minimum(
+        df["manufacture_year"].values + reg_offset, claim_years
+    )
+
+    # vehicle_age_years: years since first registration — user-relevant age metric
+    df["vehicle_age_years"] = claim_years - df["registration_year"].values
 
     return df
