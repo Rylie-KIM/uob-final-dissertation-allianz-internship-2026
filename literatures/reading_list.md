@@ -910,6 +910,138 @@ Cite in Build 03 (Unbiased Evaluation) and Build 06 (Causal Mitigation). Frame t
 
 ---
 
+## Part 9 — Mathematical Evaluation of SFP / Feedback Loops
+
+*Added 2026-06-23. These papers provide formal tools for **quantifying** how strong an SFP loop is — as opposed to proving it exists (P12) or defining its framework (P15). They are the gap-filling literature for Build 02's detection logic.*
+
+---
+
+### P29 · Mendler-Dünner et al. (2020) — Stochastic Optimization for Performative Prediction
+
+**Citation**
+Mendler-Dünner, C., Perdomo, J. C., Zrnic, T. & Hardt, M. (2020). "Stochastic Optimization for Performative Prediction." *Advances in Neural Information Processing Systems (NeurIPS) 33*.
+
+**Link** → https://proceedings.neurips.cc/paper/2020/hash/33e75ff09dd601bbe69f351039152189-Abstract.html | arXiv: https://arxiv.org/abs/2002.09058
+**Citations** ≈ 250+ (Semantic Scholar) · **Venue** *NeurIPS* (A* CORE ranking)
+
+**Why this paper matters**
+P15 (Perdomo et al.) defines performative risk and proves the gap between standard ERM and the performative optimum. This companion paper asks the next question: *how quickly does repeated retraining converge to the biased performative-stable point?* The convergence rate is a direct mathematical measure of **how fast** the SFP loop locks in.
+
+**Summary**
+Distinguishes two natural deployment strategies: (a) **greedy deploy** — deploy immediately after each stochastic gradient step; (b) **lazy deploy** — accumulate gradients on multiple samples before redeploying. Derives necessary and sufficient conditions for convergence to a performatively stable (PS) point under each strategy. Shows that sensitivity (how much the data distribution shifts per unit change in model parameters) and strong convexity jointly determine whether the loop stabilises or diverges. Generalises Perdomo et al. to the non-i.i.d., stochastic gradient regime.
+
+**Key concept / formula**
+Let ε be the sensitivity (ε = max‖θ₁−θ₂‖→0 W₂(D(θ₁), D(θ₂))/‖θ₁−θ₂‖) and β the strong convexity constant of the loss. Convergence condition: **ε/β < 1** — the distribution shift per parameter change must be smaller than the loss curvature. When ε/β ≥ 1 the loop diverges (the SFP amplification outpaces the model's self-correcting tendency).
+
+**How to apply at Insurance A Cop.**
+The ratio ε/β is the quantitative SFP loop coefficient for the total loss pipeline. Estimate ε empirically by measuring how much the scrapping-decision distribution shifts between v1 and v2a (Wasserstein distance on propensity scores). Estimate β from the Hessian of the v2a loss. If ε/β is close to or exceeds 1, the simulation (Build 01) and real-data evaluation (Build 03) will show runaway drift; if ε/β < 1, convergence to a biased-but-stable fixed point is expected.
+
+**What to write in the dissertation**
+Cite alongside P15 in the theory section. State: "Mendler-Dünner et al. (2020) prove that convergence to a performatively stable point requires ε/β < 1, where ε is the distribution sensitivity and β is the loss curvature. We estimate this ratio empirically in Build 02 as a single-number loop severity score."
+
+---
+
+### P30 · Pagan et al. (2023) — A Classification of Feedback Loops and Their Relation to Biases in Automated Decision-Making
+
+**Citation**
+Pagan, N., Baumann, J., Elokda, E., De Pasquale, G., Bolognani, S. & Hannák, A. (2023). "A Classification of Feedback Loops and Their Relation to Biases in Automated Decision-Making Systems." *arXiv preprint*, arXiv:2305.06055.
+
+**Link** → https://arxiv.org/abs/2305.06055
+**Citations** ≈ 30+ (Semantic Scholar, 2026) · **Venue** arXiv preprint (cs.LG / FAccT-adjacent)
+
+**Why this paper matters**
+The paper's own abstract states: "a rigorous theoretical understanding of the feedback dynamics in ML-based decision-making systems is currently missing." It then provides exactly that via control theory. For Build 02 (Loop Detection), knowing **which type** of feedback loop is operating determines which detection test is most powerful.
+
+**Summary**
+Uses dynamical-systems / control-theory language to classify ML feedback loops into formal types based on the direction and timescale of the feedback signal. Shows that different loop types produce characteristically different bias signatures in the learned model and in outcome distributions. Derives conditions under which each loop type leads to persistent bias amplification vs. convergence to an unbiased equilibrium. Provides a taxonomy that researchers can use to identify which type of loop applies to their system from observable data.
+
+**Key concept / formula**
+Classifies loops by the sign and delay of the feedback gain: a loop with positive gain and short delay (the total loss case — scrapping immediately forces label=1) is the "amplifying feedback" type, which the paper proves converges to a maximally biased fixed point under any learning rate. A loop with negative gain (error-correcting) is self-stabilising. The gain sign is identifiable from the cross-correlation between model score and label at the next timestep.
+
+**How to apply at Insurance A Cop.**
+Step 1 of SFPDetector (temporal prediction correlation) can be re-grounded in this taxonomy: rising cross-version Spearman rank correlation is the empirical signature of a positive-gain amplifying loop. Step 4 (segment blind spots) corresponds to the paper's "one-sided selection" loop subtype. Cite this to give the 4-step detector a unified theoretical basis rather than presenting each step as an ad-hoc heuristic.
+
+**What to write in the dissertation**
+Cite in the Build 02 methodology section when introducing the four-step SFP detection algorithm. State: "following Pagan et al. (2023), we classify the total loss SFP mechanism as an amplifying positive-gain feedback loop; each detection step targets the observable signature of this loop type."
+
+---
+
+### P31 · Veprikov, Afanasiev & Khritankov (2025) — A Mathematical Model of the Hidden Feedback Loop Effect in Machine Learning Systems
+
+**Citation**
+Veprikov, A., Afanasiev, A. & Khritankov, A. (2025). "A Mathematical Model of the Hidden Feedback Loop Effect in Machine Learning Systems." *Knowledge and Information Systems* (Springer). (arXiv preprint: arXiv:2405.02726, May 2024.)
+
+**Link** → https://arxiv.org/abs/2405.02726 | https://link.springer.com/article/10.1007/s10115-025-02560-w
+**Citations** ≈ 5 (early; published 2025) · **Journal** *Knowledge and Information Systems* (Springer, IF ≈ 2.5)
+
+**Why this paper matters**
+The only paper identified (as of 2026) that provides a single mathematical model unifying **error amplification**, **induced concept drift**, and **echo chambers** as special cases of the same repeated-learning feedback loop. This is the most directly applicable paper for formalising what the SFP simulation (Build 01) implements and what the detector (Build 02) is searching for.
+
+**Summary**
+Formalises the entire "data collection → training → deployment → environment influence → data collection" cycle as a single dynamical system. The key insight: the state of the environment at time t+1 is a deterministic function of the environment at time t *and* the predictions made at t. This causally couples the learner to the data-generating process, violating i.i.d. assumptions and producing a zoo of observable phenomena (error amplification, concept drift, echo chambers) depending on the feedback gain coefficient. Provides a theorem on the limiting set of distributions the system can converge to and sufficient conditions for the loop to be "hidden" (undetectable by standard train/test splitting).
+
+**Key concept / formula**
+Repeated learning map: E_{t+1} = F(E_t, M_t) where E_t is the environment distribution and M_t is the deployed model. A feedback loop is "hidden" when the standard empirical risk on the held-out split is not a monotone function of the true performative risk — i.e., the model appears to improve on the test set while the loop worsens. This directly explains why v2a's OOT AUC at Insurance A Cop. looked acceptable while the scrap rate inflated.
+
+**How to apply at Insurance A Cop.**
+Build 01 (SFP Simulation) is implementing the map E_{t+1} = F(E_t, M_t) with `repair_decision` as the coupling mechanism. Build 02 Step 1 (temporal score correlation) detects the signature of F being non-trivial. Build 03 (Unbiased Evaluation) is needed precisely because the OOT AUC is an example of the "hidden loop" condition — it masks performative risk growth. Cite this paper as the mathematical unification of all four detection steps.
+
+**What to write in the dissertation**
+Cite in the theory chapter as the unified mathematical model. State: "Veprikov et al. (2025) formalise the repeated learning process as E_{t+1} = F(E_t, M_t) and prove conditions under which feedback effects are 'hidden' from standard evaluation metrics. Our Build 03 unbiased evaluation addresses exactly this hiding condition: the OOT AUC on v1-logged data is a biased proxy for performative risk, consistent with their Theorem 3."
+
+---
+
+### P32 · Jiang et al. (2019) — Degenerate Feedback Loops in Recommender Systems
+
+**Citation**
+Jiang, R., Chiappa, S., Lattimore, T., György, A. & Kohli, P. (2019). "Degenerate Feedback Loops in Recommender Systems." *Proceedings of the 2019 AAAI/ACM Conference on AI, Ethics, and Society (AIES '19)*, pp. 383–390.
+
+**Link** → https://dl.acm.org/doi/10.1145/3306618.3314288 | arXiv: https://arxiv.org/abs/1902.10730
+**Citations** ≈ 200+ (Semantic Scholar, 2026) · **Venue** *AIES 2019* (AAAI/ACM Conference on AI, Ethics, and Society)
+
+**Why this paper matters**
+Provides formal **degeneracy conditions** — sufficient conditions under which a feedback loop provably converges to a state where the system only ever acts on a collapsed subset of its input space. In the total loss setting, degeneracy = the model eventually scraps every high-score vehicle regardless of true repairability, collapsing the observed label distribution to all-1 in the high-score band. Crucially, the paper also **disentangles two distinct phenomena** that are often conflated: the *echo chamber* effect (model amplifies its own past decisions) and the *filter bubble* effect (model becomes blind to items/claims outside the already-explored region). This maps directly onto Build 02's Step 1 (echo chamber: temporal score inflation) and Step 4 (filter bubble: segment blind spots).
+
+**Summary**
+Models the recommender-system feedback loop as a dynamical system where the recommendation policy influences user interest states, which in turn determine future feedback to the model. Formalises *system degeneracy* as convergence of the user-interest distribution to a degenerate point (all mass on one item type). Derives sufficient conditions for degeneracy under both deterministic and stochastic update dynamics. Disentangles the echo chamber (caused by the recommender's own bias reinforcing itself) from the filter bubble (caused by user preference drift under personalisation). Proposes practical mitigation: injecting diversity into recommendations to slow degeneracy onset — analogous to Build 05's garage-routing exploration budget.
+
+**Key concept / formula**
+Degeneracy condition (deterministic case): the Jacobian of the feedback map F at the fixed point has spectral radius > 1 — the system is locally unstable away from the degenerate attractor. Under stochastic dynamics, degeneracy occurs almost surely when the noise magnitude is below a threshold determined by the feedback gain. The echo chamber / filter bubble split: echo chamber arises when F amplifies the model's own output signal; filter bubble arises when F restricts the input distribution regardless of model output.
+
+**How to apply at Insurance A Cop.**
+Build 02 Step 1 (temporal score correlation) measures the echo chamber: rising Spearman rank correlation between v1 and v2a scores signals that the model is amplifying its own past decisions. Build 02 Step 4 (segment blind spots) measures the filter bubble: vehicle segments with near-100% scrap rates are the degenerate attractor — the model has "filtered out" any information about true repairability there. The degeneracy conditions provide a formal check: if the Jacobian spectral radius of the v1→v2a score-mapping exceeds 1 in any score band, that band is on a diverging path and is the priority target for Build 05's garage-routing exploration.
+
+**What to write in the dissertation**
+Cite in the Build 02 methodology section alongside P30 (Pagan et al.) to ground the echo-chamber vs. filter-bubble distinction formally. State: "following Jiang et al. (2019), we distinguish the echo chamber component of the SFP loop (captured by Step 1's temporal score correlation) from the filter bubble component (captured by Step 4's segment blind-spot analysis). The paper's degeneracy conditions provide a formal criterion for identifying which score bands are at risk of irreversible information collapse."
+
+---
+
+### P33 · Brown, Hod & Kalemaj (2022) — Performative Prediction in a Stateful World
+
+**Citation**
+Brown, G., Hod, S. & Kalemaj, I. (2022). "Performative Prediction in a Stateful World." *Proceedings of the 25th International Conference on Artificial Intelligence and Statistics (AISTATS)*, PMLR 151:6045–6061.
+
+**Link** → https://proceedings.mlr.press/v151/brown22a.html | arXiv: https://arxiv.org/abs/2011.03885
+**Citations** ≈ 90+ (Semantic Scholar, 2026) · **Venue** *AISTATS 2022* (A-ranked, PMLR)
+
+**Why this paper matters**
+P15 (Perdomo et al.) defines performative risk under the map D(θ) — the data distribution depends only on the **current** model θ. This is an incomplete model of the total loss SFP loop: in practice the distribution at retraining time depends not only on v2's model parameters but also on the **accumulated state** of forced-positive labels generated by all prior versions (v1 → v2). This paper extends performative prediction to D(θ, s_t), where s_t is the state of the population at time t. The state evolves across model generations, and convergence conditions now depend on **both** distribution sensitivity and state-transition dynamics. This directly explains why the Insurance A Cop. v3 retraining failed: the state (v1+v2 label contamination accumulated over the training window) was already entrenched, and retraining on contaminated labels could not escape the biased equilibrium regardless of v3's architecture.
+
+**Summary**
+Proposes a framework where the response of the target population to the deployed classifier is a function of both the classifier θ and the current state s_t (the distribution of the population itself). The state evolves according to a transition function g: s_{t+1} = g(s_t, θ_t). Two retraining algorithms are analysed: (1) **repeated risk minimisation** — retrain on the current state's data distribution; (2) **lazy variant** — retrain less frequently, allowing the state to settle. Derives necessary and sufficient conditions for convergence to a stable equilibrium near the performatively optimal classifier. Captures the phenomenon that distinct groups accumulate information and resources at different rates in response to the deployed classifier — translating to vehicle segments accumulating forced-positive labels at different rates under the scrapping policy.
+
+**Key concept / formula**
+Stateful performative map: D(θ, s_t), with state transition s_{t+1} = g(s_t, θ_t).
+Convergence to equilibrium (θ*, s*) requires: sensitivity ε_θ (distribution shift per parameter change) and sensitivity ε_s (state shift per state change) jointly satisfy a contraction condition. When ε_s is large — i.e. the state itself is highly reactive to past model decisions — standard repeated retraining cannot escape the biased fixed point even if the model's per-step update is small.
+
+**How to apply at Insurance A Cop.**
+The state s_t is the accumulated label-contamination profile across vehicle segments: how many forced-positive labels have been added per segment across all prior model versions. After v1 and v2a both ran with the absolute 0.872 threshold, s is heavily contaminated in high-RTV / high-damage segments. Build 01 should simulate the stateful dynamics explicitly — not just the one-step v1→v2 transition, but the multi-step v1→v2→v3 trajectory — to show that even a well-specified v3 cannot escape the biased equilibrium once the state accumulation has reached a threshold. The state-dependent framework also explains why v2b (counterfactual with pre-ML data) partially resists SFP: including pre-ML labels in training effectively resets part of the contaminated state.
+
+**What to write in the dissertation**
+Cite alongside P15 in the theory section. State: "Perdomo et al. (2020) characterise the loop in terms of the current model alone. Brown et al. (2022) generalise this to a stateful setting where s_{t+1} = g(s_t, θ_t): the distribution depends on both the model and the accumulated history of prior scrapping decisions. This is the correct model for the Insurance A Cop. pipeline, where v1's forced-positive labels became part of the training state for v2a, and v2a's labels in turn become the state for v3. The failure of v3 retraining is consistent with Brown et al.'s result that a large state sensitivity ε_s can prevent convergence to the performatively optimal classifier."
+
+---
+
 ## Paper Role Classification
 
 > A paper can belong to multiple categories. See the **Paper Category Framework** section at the top for category definitions.
@@ -945,6 +1077,11 @@ Cite in Build 03 (Unbiased Evaluation) and Build 06 (Causal Mitigation). Frame t
 | P26 | Bandit Algorithms (book) | | | ✓ | General theory — contextual bandit (Ch. 36) assumes reward is always observed; we permanently lose oracle for scrapped cases |
 | P27 | Selective Labels Problem | ✓ | ✓ | ✓ | Contraction requires multiple concurrent heterogeneous decision-makers; we have a single sequential model pipeline — precondition fails |
 | P28 | PU Learning Survey | ✓ | ✓ | ✓ | SCAR assumption definitively violated; SAR methods need to estimate e(x) — our advantage is e(x) is known, but SCAR-based prior estimators (e.g. c = Pr(s=1)/α) are invalid |
+| P29 | Stochastic Opt. for Performative Pred. | ✓ | ✓ | | Convergence condition ε/β < 1 requires estimating Wasserstein sensitivity ε between model versions — needs two deployed versions to compute empirically |
+| P30 | Classification of Feedback Loops | ✓ | ✓ | | Taxonomy and gain-sign classification; does not provide a correction or debiasing algorithm |
+| P31 | Mathematical Model of Hidden Feedback Loop | ✓ | ✓ | | Provides the theoretical unification; no off-the-shelf implementation — must be instantiated for the total loss domain |
+| P32 | Degenerate Feedback Loops in Recommender Systems | ✓ | ✓ | | Recommender-system setting (user preference drift); forced-label structure unique to total loss must be analogised, not directly applied |
+| P33 | Performative Prediction in a Stateful World | ✓ | ✓ | | Convergence conditions require estimating state sensitivity ε_s from multi-generation logs (needs v1→v2→v3 data); no debiasing or correction method |
 
 ---
 
@@ -995,10 +1132,15 @@ Cite in Build 03 (Unbiased Evaluation) and Build 06 (Causal Mitigation). Frame t
 | P26 | Lattimore & Szepesvári | 2020 | Bandit Algorithms (book) | Mitigate | Cambridge UP | doi:10.1017/9781108571401 | 1,500 |
 | P27 | Lakkaraju et al. | 2017 | Selective Labels Problem | Define + Detect + Mitigate | KDD | dl.acm.org/doi/10.1145/3097983.3098066 | 450 |
 | P28 | Bekker & Davis | 2020 | PU Learning survey | Define + Detect + Mitigate | Machine Learning | doi:10.1007/s10994-020-05877-5 | 1,000 |
+| P29 | Mendler-Dünner et al. | 2020 | Stochastic Opt. for Performative Pred. | Define + Detect | NeurIPS | arxiv.org/abs/2002.09058 | 250 |
+| P30 | Pagan et al. | 2023 | Classification of Feedback Loops | Define + Detect | arXiv | arxiv.org/abs/2305.06055 | 30 |
+| P31 | Veprikov et al. | 2025 | Mathematical Model of Hidden Feedback Loop | Define + Detect | KAIS (Springer) | arxiv.org/abs/2405.02726 | 5 |
+| P32 | Jiang et al. | 2019 | Degenerate Feedback Loops in Recommender Systems | Define + Detect | AIES | dl.acm.org/doi/10.1145/3306618.3314288 | 200 |
+| P33 | Brown et al. | 2022 | Performative Prediction in a Stateful World | Define + Detect | AISTATS | arxiv.org/abs/2011.03885 | 90 |
 
 ---
 
-*All citation counts are approximate Google Scholar / Semantic Scholar figures as of mid-2026. Regulatory documents (P25) do not have citation counts. P27 and P28 added 2026-06-15 following domain confirmation (total loss prediction).*
+*All citation counts are approximate Google Scholar / Semantic Scholar figures as of mid-2026. Regulatory documents (P25) do not have citation counts. P27 and P28 added 2026-06-15 following domain confirmation (total loss prediction). P29, P30, P31 added 2026-06-23 to fill the mathematical SFP evaluation gap — providing convergence rates (P29), loop-type classification (P30), and a unified repeated-learning model (P31) that the existing library lacked.*
 
 ---
 
@@ -1037,6 +1179,11 @@ The remaining 10 are behind institutional paywalls or are paid books — downloa
 | P26 | `p26.pdf` ✓ | Downloaded | tor-lattimore.com (open access book, 597pp) |
 | P27 | — | **ACM DL / UoB library** | KDD 2017 · ACM DL: dl.acm.org/doi/10.1145/3097983.3098066 (no arXiv preprint) |
 | P28 | — | **arXiv free / UoB library** | arXiv:1811.04820 (free preprint); Springer DOI: 10.1007/s10994-020-05877-5 |
+| P29 | — | **arXiv free** | arXiv:2002.09058 · NeurIPS 2020 proceedings also open access |
+| P30 | — | **arXiv free** | arXiv:2305.06055 |
+| P31 | — | **arXiv free / UoB library** | arXiv:2405.02726 (free preprint); Springer KAIS DOI: 10.1007/s10115-025-02560-w |
+| P32 | — | **arXiv free / ACM DL** | arXiv:1902.10730 (free preprint); ACM DL: dl.acm.org/doi/10.1145/3306618.3314288 |
+| P33 | — | **arXiv free** | arXiv:2011.03885 · AISTATS 2022 proceedings also open access (PMLR 151) |
 
 **Quick access for paywalled papers via UoB library:**
 1. Go to https://www.bristol.ac.uk/library/
