@@ -1,4 +1,5 @@
 /test
+/meeting
 __pycache__/
 *.pyc
-*.pyo
+*.pyodu
