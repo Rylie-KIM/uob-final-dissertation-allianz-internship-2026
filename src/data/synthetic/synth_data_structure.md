@@ -26,7 +26,7 @@
 # Synthetic Dataset Schema
 **UK Motor Insurance Claims — SFP Loop Research**
 **Domain: Claims Operations — Total Loss Prediction (is the car repairable?)**
-Total columns: 39 (claims table) | Output files: claims_pre_v1.parquet, claims_v1_log.parquet, vehicle_enrichment.parquet | Rows: 10,000
+Total columns: 48 (claims_v1_log) | Output files: claims_pre_v1.parquet, claims_v1_log.parquet, vehicle_enrichment.parquet | Rows: 70,000
 
 ---
 
@@ -44,12 +44,17 @@ Total columns: 39 (claims table) | Output files: claims_pre_v1.parquet, claims_v
 [Step 1]   Generate 10,000 base claim features
             claim_id, policy_id, dates, vehicle_make, vehicle_model, vehicle_type,
             damage_type, damage_location, damage_severity, agent_channel, coverage_type,
-            booleans, vehicle_age_years, mileage, driver_age, prior_claims_count
+            booleans, mileage, driver_age, prior_claims_count,
+            manufacture_year (user-reported, 2004–2024),
+            registration_year (DVLA plate date, manufacture_year to claim_date.year),
+            vehicle_age_years = claim_date.year − registration_year
 
 [Step 1b]  Join enrichment table on (vehicle_make, vehicle_model, manufacture_year)
-            → vehicle_value        = typical_market_value_gbp × age_depreciation_factor
+            → used_car_price_index = USED_CAR_PRICE_INDEX[claim_date.year]  (market conditions at claim time)
+            → vehicle_value        = typical_market_value_gbp × age_depreciation_factor × used_car_price_index
             → repair_estimate_gbp  = part_cost_index × f(damage_severity, damage_location)
             → repair_to_value_ratio = repair_estimate_gbp / vehicle_value
+            No join misses: manufacture_year always within enrichment range (2004–2024)
 
 [Step 2]   Internal DGP — compute garage_outcome (not saved as column)
             logit = f(repair_to_value_ratio, damage_severity, damage_location, ...)
@@ -226,7 +231,6 @@ Full data timeline (per model version)
 | `damage_severity` | string | `minor`, `moderate`, `severe` | Handler's initial subjective assessment at claim intake, recorded **before** garage inspection; `severe` is a key DGP predictor (+1.5); susceptible to claimant framing and handler experience — one source of pre-ML bias |
 | `agent_channel` | string | `online`, `broker`, `direct`, `app`, `phone` | Channel through which claim was filed; `online` and `app` claims have lower handler oversight at intake; `broker` involvement typically means a more thoroughly documented claim; channel also correlates with customer demographics |
 | `coverage_type` | string | `third_party`, `third_party_fire_theft`, `comprehensive` | Policy coverage tier; `third_party` cannot claim for own vehicle damage — presence in a vehicle damage claim row would be a data anomaly to flag; `tpft` covers fire and theft only; `comprehensive` customers can claim for all damage types and do so more frequently |
-| `repair_decision` | string | `sent_to_garage`, `scrapped_by_model`, `scrapped_by_handler` | What actually happened to the car; **key SFP mechanism column** — `scrapped_by_model` and `scrapped_by_handler` rows receive a forced label of 1 without garage verification, generating the self-fulfilling signal; era-dependent (2016–2021: handler decision, 2022+: model v1 decision) |
 
 ---
 
@@ -245,11 +249,13 @@ Full data timeline (per model version)
 
 | Column | Type | Range | Distribution | Notes |
 |---|---|---|---|---|
-| `vehicle_age_years` | int | 0 → 20 | Right-skewed (most 1–8) | **Key DGP feature** (+0.8 at > 12 yrs): older cars → lower `vehicle_value` → easier to breach total loss threshold; depreciation modelled at 8%/yr (floor at 10% of new value) |
-| `manufacture_year` | int | 2004 → 2024 | Derived | `YEAR(claim_date) − vehicle_age_years`; join key for enrichment; newer models (post-2018) have higher `part_cost_index` due to ADAS sensors and complex bumper assemblies |
+| `vehicle_age_years` | int | 0 → 20 | Derived | `YEAR(claim_date) − registration_year`; **key DGP feature** (+0.8 at > 12 yrs): older cars → lower `vehicle_value` → easier to breach total loss threshold; depreciation modelled at 8%/yr (floor at 10% of new value) |
+| `manufacture_year` | int | 2004 → 2024 | User-reported | Reported by policyholder at claim intake (from V5C logbook); join key for enrichment table; newer models (post-2018) have higher `part_cost_index` due to ADAS sensors and complex bumper assemblies; always within enrichment table range so join never misses |
+| `registration_year` | int | 2004 → 2024 | User-reported | Year the car was first registered with DVLA (plate issue date); 0–2 years after `manufacture_year` (accounts for dealer stock and import lag); used to compute `vehicle_age_years` — the user-relevant age metric |
 | `vehicle_value` | float | 500 → 80,000 (GBP) | Derived | `typical_market_value_gbp × age_depreciation_factor` from enrichment join; **denominator of `repair_to_value_ratio`** — errors here propagate directly to the strongest DGP predictor |
 | `mileage` | int | 0 → 200,000 | Right-skewed | **Key DGP feature** (+0.6 at > 120,000 miles): high mileage reduces residual value and repair worthiness; captures wear independent of `vehicle_age_years` (a young car can have high mileage) |
 | `repair_estimate_gbp` | float | 200 → 25,000 (GBP) | Derived | `part_cost_index × f(damage_severity, damage_location)` from enrichment join; **numerator of `repair_to_value_ratio`**; luxury brand parts are disproportionately expensive relative to vehicle value — a Mercedes A-Class repair can total the car where a Fiesta repair would not |
+| `used_car_price_index` | float | 0.97 → 1.28 | Derived | Market-level price multiplier for the **claim year** (baseline 2016 = 1.00); applied to `vehicle_value` at join time so the same ABI code (make/model/manufacture_year) carries a different ACV depending on when the claim is filed; captures UK used-car market shocks (COVID-19 demand drop 2020 = 0.97; semiconductor shortage peak 2022 = 1.28); relevant for SFP analysis because ACV inflation shifts `repair_to_value_ratio` and therefore the total-loss signal independently of any loop contamination |
 | `repair_to_value_ratio` | float | 0.01 → 2.00 | Derived | `repair_estimate_gbp / vehicle_value`; **strongest DGP predictor** (+2.5 at > 0.8); industry standard total loss threshold is 0.7–0.8; values > 1.0 mean repair costs exceed the car's worth; clip at 2.0 in preprocessing |
 | `driver_age` | int | 17 → 85 | Near-normal (μ=42, σ=15) | Age of main driver; young drivers (17–25) attract higher premiums and are statistically higher risk; drivers 75+ also have elevated risk profiles due to reaction time; age 35–55 is typically the lowest-risk band |
 | `prior_claims_count` | int | 0 → 10 | Poisson (λ=0.8) | Number of previous claims on the same `policy_id`; counts ≥ 3 may indicate a high-risk policyholder profile worth additional scrutiny; more granular than `has_prior_claims` — use this for modelling, use `has_prior_claims` as a quick binary flag |
@@ -286,8 +292,13 @@ Naming convention: `model_v{n}_score`, `model_v{n}_decision`, `model_v{n}_observ
 | `model_v2a_decision` | int | 0 / 1 | **Currently deployed** | 1 if `model_v2a_score` ≥ **0.872** → scrapped; 0 → garage |
 | `model_v2b_score` | float | 0.00 → 1.00 | Research comparison only — not a real model | P(total_loss) trained on mixed labels (pre_ml_label 2020–2021 + model_v1_observed_outcome 2022–2024); shows SFP dilution when unbiased prior is available; does not represent v2 (pre_ml disposed) or v3 (tried 2023+ data, different approach) |
 | `model_v2b_decision` | int | 0 / 1 | Research comparison only | 1 if `model_v2b_score` ≥ **0.872** → scrapped; 0 → garage |
-
-> **v3 not simulated yet.** Real v3 (attempted 2025) trained on v2 log data using 2023+ only (pre-COVID period dropped). Exact training window uncertain. Synthetic v3 generation is an optional extension — would add `model_v3_score`, `model_v3_decision` columns to demonstrate SFP deepening across three generations.
+| `model_v2b_observed_outcome` | int | 0 / 1 | Research comparison only | v3b's training target; same forced-label mechanism as v1/v2a |
+| `model_v3a_score` | float | 0.00 → 1.00 | Not deployed — SFP deepening demo | Trained on `model_v2a_observed_outcome` (2023+); shows loop deepening across three generations |
+| `model_v3a_decision` | int | 0 / 1 | Not deployed | 1 if `model_v3a_score` ≥ **0.872** |
+| `model_v3a_observed_outcome` | int | 0 / 1 | Not deployed | Counterfactual — what v3a's labels would look like |
+| `model_v3b_score` | float | 0.00 → 1.00 | Research comparison only | Trained on `model_v2b_observed_outcome` (2023+); counterfactual SFP-diluted path |
+| `model_v3b_decision` | int | 0 / 1 | Research comparison only | 1 if `model_v3b_score` ≥ **0.872** |
+| `model_v3b_observed_outcome` | int | 0 / 1 | Research comparison only | Counterfactual — v3b label trajectory |
 
 > **Threshold logic (every model version identical):**
 > Model outputs probability via `predict_proba(X)[:, 1]`
@@ -320,15 +331,15 @@ garage_outcome = Bernoulli(sigmoid(logit))   # ~10% positive; used in Steps 3 & 
 
 ```
 Rule A: repair_to_value_ratio > 0.9
-         → pre_ml_decision = 1 → repair_decision = 'scrapped_by_handler'
+         → pre_ml_decision = 1
          → pre_ml_label = 1    (self-fulfilling, garage never checked)
 
 Rule B: damage_severity == 'severe' AND vehicle_age_years > 15
-         → pre_ml_decision = 1 → repair_decision = 'scrapped_by_handler'
+         → pre_ml_decision = 1
          → pre_ml_label = 1    (self-fulfilling, garage never checked)
 
 Otherwise:
-         → pre_ml_decision = 0 → repair_decision = 'sent_to_garage'
+         → pre_ml_decision = 0
          → pre_ml_label = garage_outcome  (actual repair result from garage)
 
 2022–2024 rows: pre_ml_decision = NaN, pre_ml_label = NaN
@@ -380,7 +391,7 @@ repair_estimate_gbp   = part_cost_index × base_repair_cost(damage_severity, dam
 repair_to_value_ratio = repair_estimate_gbp / vehicle_value
 ```
 
-> **Null handling after join:** If any row fails to match the enrichment table (e.g. rare make/model/year combination), the join produces null values for `typical_market_value_gbp` and `part_cost_index`. These are imputed rather than dropped — median imputation by `vehicle_make` group, falling back to dataset median if the group is also sparse. Derived fields (`vehicle_value`, `repair_estimate_gbp`, `repair_to_value_ratio`) are then recomputed on the imputed values. No rows are removed due to enrichment join failures.
+> **Null handling after join:** `manufacture_year` is generated directly within the enrichment table range (2004–2024), so join misses do not occur in practice. The `EnrichmentImputer` in `generate/imputer.py` is retained as a safeguard for real-data inference where manufacture_year may fall outside the enrichment range; it fills nulls using group medians keyed by `(vehicle_make, vehicle_model)` and falls back to the global median. Critically, the `is_high_value_vehicle` threshold is also fitted by the imputer on the v1 training window and reused at inference to prevent training-serving skew.
 
 #### `age_depreciation_factor` — straight-line 8%/yr with a 10% floor
 
@@ -463,8 +474,8 @@ model_v1_score = model_v1.predict_proba(X_all)[:, 1]   # all 10,000 rows
 ```
 SCRAP_THRESHOLD = 0.872   # absolute P(total_loss) cutoff
 
-model_v1_decision = 1  if model_v1_score ≥ SCRAP_THRESHOLD  → repair_decision = 'scrapped_by_model'
-                  = 0  otherwise                             → repair_decision = 'sent_to_garage'
+model_v1_decision = 1  if model_v1_score ≥ SCRAP_THRESHOLD  → scrapped (self-fulfilling)
+                  = 0  otherwise                             → sent to garage
 
 model_v1_observed_outcome:
   decision = 1  →  1              (self-fulfilling — garage never checked)
@@ -480,12 +491,13 @@ comparison baseline for the dissertation.
 
 ```python
 # Actual signature in src/data/synthetic/generate/model.py
-def train_and_apply_v2(df, X_all, option: str = "A") -> pd.DataFrame:
-    # option "A": REAL v2 scenario — v1 log only, full SFP contamination
-    # option "B": RESEARCH COMPARISON — mixes pre-ML labels with v1 log
-    #             (not v2: pre_ml disposed; not v3: v3 used 2023+ data only)
+def train_and_apply(df, spec: ModelSpec, garage_outcome, X_all=None, enrichment_table=None):
+    # spec selects training window, target column, and output column prefix
+    # V2A_SPEC: REAL v2 scenario — v1 log only, full SFP contamination
+    # V2B_SPEC: RESEARCH COMPARISON — mixes pre-ML labels with v1 log
+    # V3A_SPEC / V3B_SPEC: v3 variants (2023+)
     ...
-    # writes columns model_v2{a|b}_score and model_v2{a|b}_decision
+    # writes columns model_{spec.tag}_score, _decision, _observed_outcome
 ```
 
 ```
@@ -526,19 +538,19 @@ Output files (exactly as written by run.py):
   claims_pre_v1.parquet      2016–2021 rows — saved BEFORE v1 is trained, so it
                               carries NO model columns.
                               columns: base features + enrichment-derived fields
-                                       + pre_ml_decision + pre_ml_label + repair_decision
+                                       + pre_ml_decision + pre_ml_label
 
   claims_v1_log.parquet      2022–2024 rows
                               columns: base features + enrichment-derived fields
                                        + pre_ml_decision (NaN) + pre_ml_label (NaN)
-                                       + repair_decision
-                                       + model_v1_score + model_v1_decision
-                                       + model_v1_observed_outcome
-                                       + model_v2a_score + model_v2a_decision
-                                       + model_v2b_score + model_v2b_decision
+                                       + model_v1_score + model_v1_decision + model_v1_observed_outcome
+                                       + model_v2a_score + model_v2a_decision + model_v2a_observed_outcome
+                                       + model_v2b_score + model_v2b_decision + model_v2b_observed_outcome
+                                       + model_v3a_score + model_v3a_decision + model_v3a_observed_outcome
+                                       + model_v3b_score + model_v3b_decision + model_v3b_observed_outcome
 
   vehicle_enrichment.parquet enrichment lookup table
-                              rows: ~200 (10 makes × ~4 models × ~5 year bands)
+                              rows: 903 (10 makes × ~4–5 models × 21 year bands 2004–2024)
 ```
 
 > **Note:** v1 is scored on *all* rows during generation, but only the 2022–2024
@@ -622,15 +634,23 @@ The table below shows how each SFP check shifts in meaning when a true oracle is
 ## Enrichment Table (`vehicle_enrichment.parquet`)
 
 Separate lookup table joined on (`vehicle_make`, `vehicle_model`, `manufacture_year`).
-Updated regularly at Insurance A Cop. independent of model retraining cycle.
+Updated regularly at Insurance A Cop. independent of model retraining cycle — new rows are
+appended when new make/model/year combinations enter the fleet; existing rows are refreshed
+only for market-sensitive columns (value, part cost). Physical spec columns are static per
+model year once set.
 
 | Column | Type | Notes |
 |---|---|---|
 | `vehicle_make` | string | Join key |
 | `vehicle_model` | string | Join key |
 | `manufacture_year` | int | Join key |
-| `typical_market_value_gbp` | float | Base market value; used to compute `vehicle_value` after age depreciation |
-| `part_cost_index` | float | Composite repair cost index (1.0 = average); luxury > 1.0, economy < 1.0 |
+| `typical_market_value_gbp` | float | Base market value; used to compute `vehicle_value` after age depreciation; refreshed periodically as market prices change |
+| `part_cost_index` | float | Composite repair cost index (1.0 = average); luxury > 1.0, economy < 1.0; refreshed periodically as part prices change |
+| `bhp` | int | Engine output in brake horsepower; small year-band noise simulates trim-level variation |
+| `acceleration_0_60_sec` | float | 0–60 mph time in seconds; lower = faster; inversely correlated with bhp |
+| `num_gears` | int | Number of forward gears; 1 for single-speed electric (e.g. Nissan Leaf); deterministic per model year |
+| `kerb_weight_kg` | int | Unladen vehicle weight in kg; heavier vehicles → higher structural repair cost; small year-band noise simulates variant differences |
+| `vehicle_height_mm` | int | Overall vehicle height in mm; taller vehicles (SUVs, vans) → more bodywork exposure |
 
 **Derived fields after join:**
 ```
@@ -659,22 +679,20 @@ repair_to_value_ratio   = repair_estimate_gbp / vehicle_value
 
 ## Column Count Summary (Claims Table)
 
-| Group | Count |
-|---|---|
-| Identifiers | 2 |
-| Date fields | 5 |
-| Categorical | 9 |
-| Boolean | 4 |
-| Numerical | 9 |
-| Pre-ML era | 2 |
-| Model columns | 7 (v1 ×3 + v2a ×2 + v2b ×2) |
-| **Total** | **38** |
+| Group | Count | Columns |
+|---|---|---|
+| Identifiers | 2 | claim_id, policy_id |
+| Date fields | 5 | claim_date, incident_date, policy_start_date, policy_expiry_date, report_delay_days |
+| Categorical | 8 | vehicle_make, vehicle_model, vehicle_type, damage_type, damage_location, damage_severity, agent_channel, coverage_type |
+| Boolean | 4 | is_weekend_claim, has_prior_claims, is_high_value_vehicle, car_driveable |
+| Numerical (user-reported) | 6 | manufacture_year, registration_year, vehicle_age_years, mileage, driver_age, prior_claims_count, customer_tenure_years |
+| Enrichment-derived | 6 | typical_market_value_gbp, part_cost_index, used_car_price_index, vehicle_value, repair_estimate_gbp, repair_to_value_ratio |
+| Pre-ML era | 2 | pre_ml_decision, pre_ml_label |
+| Model columns | 15 | v1 ×3 + v2a ×3 + v2b ×3 + v3a ×3 + v3b ×3 |
+| **Total (claims_v1_log)** | **48** | |
 
-> Counts are conceptual claims-table fields. The saved files differ by design:
-> `claims_pre_v1` omits the 7 model columns (saved before training);
-> `claims_v1_log` includes them. Both also carry the 6 enrichment-derived fields
-> (`manufacture_year`, `typical_market_value_gbp`, `part_cost_index`,
-> `vehicle_value`, `repair_estimate_gbp`, `repair_to_value_ratio`).
+> `claims_pre_v1` omits all 15 model columns (saved before training): **33 columns**.
+> `claims_v1_log` includes all model columns: **48 columns**.
 
 ---
 
