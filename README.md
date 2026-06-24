@@ -188,6 +188,11 @@ A v3 refresh was attempted after v2 but was not put into production; v2 remains 
 
 This is the expected signature of a model trained entirely on SFP-contaminated labels: the positive class in training data is inflated with false positives (cars v2 scrapped that were actually repairable), so v3 learns an imprecise decision boundary. Holding precision requires tightening the threshold to the point where true positives are also suppressed — recall suffers as a direct consequence. With neither the pre-ML labels nor an unbiased holdout available, v3 had no clean signal to learn from.
 
+**Additional reason v3 was shelved — Control Expert replacement (confirmed 2026-06-22):**
+Allianz acquired a third-party company called **Control Expert**, whose platform includes a total loss prediction capability. The business decision was taken to retire the in-house FTTL model in favour of Control Expert — without conducting a proper comparative evaluation. Control Expert is not yet integrated; implementation is expected in **early 2027**. In the interim, v2 remains live and the team is looking at incremental improvements rather than a full retraining cycle.
+
+One of the identified short-term improvements is **updating the enrichment table** to cover newer make/model/year combinations that currently produce join misses and degrade the model's score quality for newer vehicles. See `src/data/synthetic/generate/enrichment.py` for the synthetic equivalent.
+
 ### What the loop looks like in the generated data
 
 | Model | Training target | Scrap rate | Status |
@@ -204,3 +209,34 @@ python src/data/synthetic/run.py
 ```
 
 > Full column-level schema, the data-generating process, and the SFP verification checks live in `src/data/synthetic/synth_data_structure.md`.
+
+
+# Claim Intake Channels — FNOL vs ENOL
+
+## Definitions
+
+| Term | Full name | Description |
+|---|---|---|
+| **FNOL** | First Notification of Loss | Traditional phone-based claim intake: a call-centre handler takes the claim, can ask follow-up questions, and records detailed damage information through a free-form conversation |
+| **ENOL** | Electronic Notification of Loss | Online self-service claim intake, recently introduced at Allianz UK. The claimant follows a structured digital form; the set of fields collected is fixed by the form path rather than adaptive |
+
+## Why the channel distinction matters for the FTTL model
+
+The data that flows into the FTTL model differs structurally between the two channels:
+
+- **FNOL (phone):** Handler-mediated — can probe ambiguities, collect richer damage descriptions, and exercise judgment on severity ratings. Data quality tends to be higher but is subject to handler variability and interpretation.
+- **ENOL (online):** Fixed-path form — only the fields on the form are collected. Missing values and data errors may differ in pattern from FNOL. The claimant self-describes damage without handler prompting, which can affect `damage_severity` and `damage_location` accuracy.
+
+**Score distribution hypothesis (from Luna, 2026-06-22):** More severe total-loss incidents are likely to trigger a phone call rather than an online form — the claimant is in a worse situation and seeks direct support. This means FNOL claims may have systematically higher model scores than ENOL claims, not because of model bias but because of genuine case-mix differences between the two populations.
+
+## Current operational context
+
+A ticket in the team's sprint (confirmed 2026-06-22) is specifically investigating ENOL vs FNOL differences in:
+- Feature distributions (means, modes, missing value rates, error rates per column)
+- Model output scores (is the score distribution materially different between channels?)
+
+The analysis is primarily checking whether anything "massively concerning" surfaces — the expectation is that some difference will exist and is explainable by case-mix, not by a data pipeline issue.
+
+## Relevance to SFP research
+
+The ENOL/FNOL split is a **potential confound** for SFP detection. If the proportion of ENOL vs FNOL claims changes over time (e.g. as online filing becomes more common), this could cause a shift in the feature distribution that is unrelated to the SFP loop. When detecting score drift across model versions, it is worth checking whether shifts in channel mix can explain part of the observed drift before attributing it to SFP amplification.
