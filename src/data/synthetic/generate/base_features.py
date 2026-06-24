@@ -118,16 +118,15 @@ def generate_base_features() -> pd.DataFrame:
 
     claim_years = pd.to_datetime(df["claim_date"]).dt.year.values
 
-    # manufacture_year: user-reported at claim intake (DVLA or V5C document)
-    # Clamped to enrichment table range (2004-2024) so join always succeeds.
+    # manufacture_year, A car can't be more than 20 years old 
     mfr_low  = np.maximum(claim_years - 20, 2004)
     mfr_high = np.minimum(claim_years, 2024)
     df["manufacture_year"] = np.array([
         int(rng.integers(lo, hi + 1)) for lo, hi in zip(mfr_low, mfr_high)
     ])
 
-    # registration_year: when the car was first registered (DVLA plate issue date)
-    # 0-2 years after manufacture (accounts for dealer stock and import lag)
+    # registration_year >> (Driver and Vehicle Licensing Agency - DVLA plate issue date)
+    # offset - 0-2 years after manufacture 
     reg_offset = rng.integers(0, 3, size=N_ROWS)
     df["registration_year"] = np.minimum(
         df["manufacture_year"].values + reg_offset, claim_years

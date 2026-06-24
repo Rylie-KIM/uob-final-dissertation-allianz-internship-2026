@@ -6,7 +6,7 @@ import pandas as pd
 def simulate_pre_ml_era(df: pd.DataFrame, garage_outcome: pd.Series) -> pd.DataFrame:
     is_pre_ml = pd.to_datetime(df["claim_date"]).dt.year <= 2021
 
-    # Mimick human agent decision 
+    # Mimick human agent (handler) decision 
     rule_a = df["repair_to_value_ratio"] > 0.9
     rule_b = (df["damage_severity"] == "severe") & (df["vehicle_age_years"] > 15)
     scrapped_by_handler = rule_a | rule_b
@@ -30,11 +30,5 @@ def simulate_pre_ml_era(df: pd.DataFrame, garage_outcome: pd.Series) -> pd.DataF
 
     df["pre_ml_decision"] = pre_ml_decision
     df["pre_ml_label"]    = pre_ml_label
-
-    # repair_decision column tracks what physically happened to the car
-    repair_decision = pd.Series("sent_to_garage", index=df.index)
-    repair_decision[scrap_mask]  = "scrapped_by_handler"
-    # 2022+ rows will be overwritten in model.py after v1 policy is applied
-    df["repair_decision"] = repair_decision
 
     return df
