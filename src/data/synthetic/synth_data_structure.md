@@ -304,6 +304,8 @@ Naming convention: `model_v{n}_score`, `model_v{n}_decision`, `model_v{n}_observ
 > Model outputs probability via `predict_proba(X)[:, 1]`
 > → **absolute** decision rule: scrap iff `score ≥ 0.872` (the real cutoff, tuned for precision ≥ 0.985)
 > → this is **not** a percentile — the scrap *rate* floats with the score distribution, so v2's score drift surfaces as a higher scrap rate (the headline SFP signal).
+>
+> **Operational note — threshold change history:** The production threshold was briefly changed away from 0.872 at some point during deployment (exact value and dates not confirmed). Performance degraded and the threshold was promptly reverted to 0.872. The synthetic data models the threshold as **constant at 0.872 throughout**, consistent with how Allianz treats the dataset for analysis purposes. The brief deviation is not simulated and should not be modelled separately.
 
 ---
 
@@ -634,10 +636,25 @@ The table below shows how each SFP check shifts in meaning when a true oracle is
 ## Enrichment Table (`vehicle_enrichment.parquet`)
 
 Separate lookup table joined on (`vehicle_make`, `vehicle_model`, `manufacture_year`).
-Updated regularly at Insurance A Cop. independent of model retraining cycle — new rows are
-appended when new make/model/year combinations enter the fleet; existing rows are refreshed
-only for market-sensitive columns (value, part cost). Physical spec columns are static per
-model year once set.
+Updated at Insurance A Cop. approximately every **6, 9, or 12 months**, independently of the
+model retraining cycle.
+
+> **⚠ Unconfirmed — enrichment update mechanism:** It is not yet known how existing entries
+> are handled across update cycles. Three possibilities remain open:
+> - **Static-on-entry:** Once a per-ABI-code entry is added, its value fields are frozen;
+>   only new make/model/year rows are appended in future updates.
+> - **Yearly price refresh:** Existing entries are updated to reflect current market prices
+>   (e.g., `typical_market_value_gbp` revised to track used-car market movement).
+> - **Manufacture-year expansion only:** New rows are appended as new manufacture years
+>   enter the fleet; no changes to existing rows.
+>
+> Until this is confirmed, the synthetic data takes the **static-on-entry** assumption:
+> `typical_market_value_gbp` and `part_cost_index` are set once at row creation and do not
+> change. Market-level price movement is captured separately via `used_car_price_index`
+> (applied at join time per claim year), which is a synthetic approximation. If the real
+> enrichment table does refresh per-ABI-code values over time, enrichment-driven drift in
+> `repair_to_value_ratio` cannot be cleanly separated from SFP-driven score drift — this
+> is flagged as an open analytical risk for when real data arrives.
 
 | Column | Type | Notes |
 |---|---|---|
