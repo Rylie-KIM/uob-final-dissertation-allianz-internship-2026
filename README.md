@@ -56,6 +56,8 @@ The model's goal is to replicate engineer-level certainty (98.5% precision) but 
 - **No calibration**: XGBoost outputs raw probability-like scores but they are not calibrated. Since the model is used purely for ranking/triaging claims (not for making expected-value decisions), well-calibrated probabilities are not required and the calibration step is omitted to keep the pipeline simple. Note: if scores are used as propensity weights (e.g. for IPS correction), poor calibration can distort debiasing — this is a known limitation flagged in the SFP mitigation analysis.
 - **Decision threshold**: the scrapping policy applies an **absolute score cutoff** — a car is fast-tracked to scrap only when `model_score ≥ 0.872` (the threshold tuned on validation to hold precision ≥ 0.985). This is **not** a percentile/top-N rule. Because the cutoff is fixed in score space, the *scrap rate* is free to move with the score distribution — which is precisely how score drift in a later model version becomes observable as a higher scrap rate (the headline SFP signal). See `src/data/synthetic/generate/model.py` (`SCRAP_THRESHOLD`).
 
+  > **Operational note — threshold change history:** The threshold was briefly changed away from 0.872 at some point during production (exact value and dates not confirmed). Performance degraded and the threshold was promptly reverted to 0.872. **For the purposes of this research and the dataset, the threshold is treated as constant at 0.872 throughout the entire production period.** The brief deviation is not modelled separately and is not reflected in the decision columns in the production log. This simplification is consistent with Allianz's operational understanding of the dataset.
+
 ```
 Full data timeline
 ──────────────────────────────────────────────────────────────────────►
@@ -192,6 +194,28 @@ This is the expected signature of a model trained entirely on SFP-contaminated l
 Allianz acquired a third-party company called **Control Expert**, whose platform includes a total loss prediction capability. The business decision was taken to retire the in-house FTTL model in favour of Control Expert — without conducting a proper comparative evaluation. Control Expert is not yet integrated; implementation is expected in **early 2027**. In the interim, v2 remains live and the team is looking at incremental improvements rather than a full retraining cycle.
 
 One of the identified short-term improvements is **updating the enrichment table** to cover newer make/model/year combinations that currently produce join misses and degrade the model's score quality for newer vehicles. See `src/data/synthetic/generate/enrichment.py` for the synthetic equivalent.
+
+### Enrichment Table — Update Cycle and Open Questions
+
+The enrichment table is updated approximately every **6, 9, or 12 months**, independently of any model retraining cycle. However, the exact mechanics of these updates are **not yet confirmed**:
+
+- **Static-on-entry:** Once a per-ABI-code vehicle entry is added, its value fields (`typical_market_value_gbp`, `part_cost_index`) are frozen and never revisited — only new make/model/year rows are appended over time.
+- **Yearly price refresh:** Existing entries are updated when new prices are set — e.g., a BMW 3 Series (2020) might have its `typical_market_value_gbp` revised in subsequent update cycles to reflect used-car market conditions at the time of the update.
+- **Manufacture-year expansion:** New rows are appended as new manufacture years enter the fleet (e.g., a 2025 model year row added in a 2025/2026 update), with no changes to existing rows.
+
+It is not yet known which of these mechanisms (or which combination) applies. This uncertainty matters for SFP analysis: if enrichment values are refreshed over time, then `repair_to_value_ratio` can shift for identical vehicles across training windows purely due to enrichment changes, independently of any SFP loop. Until this is confirmed, enrichment-driven score drift cannot be cleanly separated from model-driven drift.
+
+### Model File Availability and Environment Constraints
+
+All three model versions (v1, v2, v3) are preserved as serialised model files within Allianz's internal systems. However, they cannot be loaded in the same Python environment:
+
+| Model | Files available | Environment |
+|---|---|---|
+| **v1** | ✓ | **Different dependencies** — separate environment required; incompatible with v2/v3 |
+| **v2** | ✓ | Shared environment with v3 |
+| **v3** | ✓ | Shared environment with v2 |
+
+The exact dependency differences for v1 are not yet fully documented (likely a different XGBoost or scikit-learn version). Any tool or framework that loads and compares model outputs across versions must account for this: v1 cannot be imported in the same process as v2/v3 without environment conflicts. See `src/DESIGN.md` for the isolation strategy used in the application layer.
 
 ### What the loop looks like in the generated data
 

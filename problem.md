@@ -1,6 +1,6 @@
 # Problem Definition — Fast Track Total Loss SFP Loop
 
-> This document is the **central reference** consulted when reading each paper. When writing a paper note (`notes/pXX.md`), answer the following questions:
+> This document is the **central reference** consulted when reading each paper. When writing a paper note (`literatures/notes/pXX.md`), answer the following questions:
 > 1. Which component of §2 (Problem Formalisation) does this paper address?
 > 2. Can this paper's methodology actually be applied under the constraints in §3, or do its preconditions break down?
 > 3. How does this paper classify our problem within §2.4 (Problem Type Taxonomy) — and is that classification correct?
@@ -38,6 +38,8 @@ The model's purpose is to **bypass the garage process entirely for obvious total
 - **Evaluation metric:** Primary training metric is **precision**, with a target threshold of **≥ 0.985**. Recall is computed alongside but is not an optimisation target — the model is tuned to minimise False Positives, not to maximise total-loss recall.
 - **No calibration:** XGBoost outputs probability-like scores but these are not calibrated. Since the model is used purely for ranking/triage (not expected-value-based decisions), well-calibrated probabilities are deemed unnecessary and the calibration step is omitted. **Note:** If scores are used as propensity weights (e.g. for IPS correction), the lack of calibration may distort debiasing — this is flagged as a known limitation in the SFP mitigation analysis.
 - **Decision threshold:** The scrap policy applies an **absolute score cutoff** — a vehicle is fast-tracked to salvage only when `model_score ≥ 0.872` (tuned on the validation set to satisfy precision ≥ 0.985). This is **not** a percentile/top-N rule. Because the cutoff is fixed in score space, the *scrap rate* moves freely with the score distribution — this is precisely the mechanism by which score drift in later model versions becomes observable as an increased scrap rate (= the key SFP signal).
+
+  > **Operational note — threshold change history:** The production threshold was briefly changed away from 0.872 at some point during deployment (exact value and dates not confirmed). Performance degraded and the threshold was promptly reverted to 0.872. **For all analysis in this dissertation, the threshold is treated as constant at 0.872 throughout the entire production period.** The brief deviation is not modelled and is not reflected in the decision columns in the dataset. See `README.md` for the canonical statement of this assumption.
 
 ```
 Full data timeline
@@ -171,7 +173,7 @@ $$\hat{f}_{v1} \to S^{v1} \to D^{v1} \to \tilde{Y}^{v1} \to \hat{f}_{v2}.\text{f
 
 ### 2.4 Problem Type Taxonomy — Which Existing Framework Fits?
 
-→ Moved to [`reading_list.md` — Problem Type Taxonomy section](reading_list.md#problem-type-taxonomy--which-existing-framework-fits).
+→ Moved to [`literatures/reading_list.md` — Problem Type Taxonomy section](literatures/reading_list.md#problem-type-taxonomy--which-existing-framework-fits).
 
 ### 2.5 Additional Difficulties Created by Operational Constraints
 
@@ -181,6 +183,8 @@ $$\hat{f}_{v1} \to S^{v1} \to D^{v1} \to \tilde{Y}^{v1} \to \hat{f}_{v2}.\text{f
 4. **Permanent absence of oracle $Y_i$:** Scrapped vehicles are physically destroyed, so post-hoc audits cannot recover $Y_i$. This is a stricter constraint than the typical judicial/medical selective-labels setting covered by P27 (where, for example, bail-denied individuals can be observed later).
 5. **Contamination of the OOT holdout itself:** The OOT period (most recent 6 months) is drawn from logs in which v1 was already in production, so OOT evaluation may itself be contaminated by $\tilde{Y}^{v1}$ — the assumption that "we validated on future data, so we're safe" may not hold.
 6. **ENOL/FNOL channel-mix shift as a confound (confirmed 2026-06-22):** Claims are filed either by phone (FNOL — First Notification of Loss) or online (ENOL — Electronic Notification of Loss, recently introduced). The two channels produce structurally different feature distributions: FNOL claims are handler-mediated and may capture more severe incidents (claimants in worse situations tend to phone rather than self-serve online), while ENOL claims follow a fixed form path with different missing-value and error patterns. If the proportion of ENOL claims grows over time as online filing becomes more common, this induces a feature distribution shift that is independent of any SFP loop. Score drift attributed to SFP amplification must therefore be checked against the ENOL/FNOL mix change as an alternative explanation. See `README.md` § "Claim Intake Channels — FNOL vs ENOL" for the full operational context.
+7. **Model environment incompatibility — v1 cannot share a runtime with v2/v3:** All three model versions (v1, v2, v3) are preserved as serialised files within Allianz's internal systems, but v1 has different library dependencies from v2 and v3 (exact versions not yet documented — likely a different XGBoost or scikit-learn version). v2 and v3 share the same environment. Any framework that needs to load and compare model outputs across versions must isolate v1 in a separate process or environment. This is not just an infrastructure concern: it constrains which detection methods can be applied interactively across model generations without manual environment switching. See `src/DESIGN.md` for the isolation strategy.
+8. **Enrichment table update mechanism unconfirmed:** The enrichment table (vehicle values, part cost indices) is refreshed approximately every 6, 9, or 12 months, independently of model retraining. However, it is **not yet confirmed** whether: (a) per-ABI-code entries are static once added, (b) existing value fields are refreshed to track market prices across update cycles, or (c) only new manufacture-year rows are appended. If the real enrichment table does update existing values, then `repair_to_value_ratio` — the strongest DGP predictor — can shift for the same vehicle across training windows purely due to enrichment changes, independently of any SFP loop. This is a confound for SFP score drift detection that cannot be resolved without confirming the update mechanics with the Allianz data team. See `README.md` § "Enrichment Table — Update Cycle and Open Questions" for full detail.
 
 ---
 
@@ -283,7 +287,7 @@ which is just a scaled version of the garage-observed mean — no feature-depend
 
 ## 3. Paper Reading Checklist
 
-When reading each paper and writing a note (`notes/pXX.md`), complete the following table and link it back to this document:
+When reading each paper and writing a note (`literatures/notes/pXX.md`), complete the following table and link it back to this document:
 
 | Check Item | Question |
 |------------|----------|
@@ -295,4 +299,4 @@ When reading each paper and writing a note (`notes/pXX.md`), complete the follow
 
 ---
 
-*First written: 2026-06-16. Last updated: 2026-06-23 (§2.3 extended with P33 Brown et al. AISTATS 2022 stateful performativity D(θ,s_t) and explanation of v3 retraining failure; P32 Jiang et al. AIES 2019 echo chamber / filter bubble distinction and degeneracy condition; P31 Veprikov et al. 2025 repeated-learning map E_{t+1}=F(E_t,M_t); P29 Mendler-Dünner et al. 2020 convergence condition ε/β<1 as loop severity score; P30 Pagan et al. 2023 control-theory classification as positive-gain short-delay amplifying loop. Previous update 2026-06-22: enrichment table extended with vehicle physical specs — BHP, acceleration, gears, kerb weight, height — per Luna meeting 2026-06-22; §2.1 $X_i$ notation updated; v3 section extended with Control Expert replacement context and early-2027 implementation timeline; §2.5 difficulty 6 added — ENOL/FNOL channel-mix shift as a confound for SFP score drift detection; `used_car_price_index` added to synthetic data enrichment step). Source: `README.md` (verbatim transcription, §1), direct formalisation (§2). Working assumptions may be updated as further papers are read. Cross-references: [`notes/p27.md`](notes/p27.md) (basis for selective-labels candidate evaluation in §2.4 table), `src/data/synthetic/synth_data_structure.md`, `src/data/synthetic/generate/model.py`.*
+*First written: 2026-06-16. Last updated: 2026-06-23 (§2.3 extended with P33 Brown et al. AISTATS 2022 stateful performativity D(θ,s_t) and explanation of v3 retraining failure; P32 Jiang et al. AIES 2019 echo chamber / filter bubble distinction and degeneracy condition; P31 Veprikov et al. 2025 repeated-learning map E_{t+1}=F(E_t,M_t); P29 Mendler-Dünner et al. 2020 convergence condition ε/β<1 as loop severity score; P30 Pagan et al. 2023 control-theory classification as positive-gain short-delay amplifying loop. Previous update 2026-06-22: enrichment table extended with vehicle physical specs — BHP, acceleration, gears, kerb weight, height — per Luna meeting 2026-06-22; §2.1 $X_i$ notation updated; v3 section extended with Control Expert replacement context and early-2027 implementation timeline; §2.5 difficulty 6 added — ENOL/FNOL channel-mix shift as a confound for SFP score drift detection; `used_car_price_index` added to synthetic data enrichment step). Source: `README.md` (verbatim transcription, §1), direct formalisation (§2). Working assumptions may be updated as further papers are read. Cross-references: [`literatures/notes/p27.md`](literatures/notes/p27.md) (basis for selective-labels candidate evaluation in §2.4 table), `src/data/synthetic/synth_data_structure.md`, `src/data/synthetic/generate/model.py`.*
