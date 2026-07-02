@@ -1,8 +1,0 @@
-# Core data science
-numpy>=1.26
-pandas>=2.1
-pyarrow>=15.0
-
-# Machine learning
-scikit-learn>=1.4
-xgboost>=2.0
