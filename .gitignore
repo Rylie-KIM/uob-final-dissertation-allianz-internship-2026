@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 *.pyodu
+
+# Version model repos from external apps. 
+/model_repos/
