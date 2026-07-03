@@ -1,10 +1,12 @@
 # Environment Management in Data Science
 
-> **Implementation status (2026-07-01).** The two-tier env model below is the **target**. The analysis `.venv` exists; the per-version scoring envs under `src/model/envs/{v1,v2,v3}/` and `src/scoring/` are **not yet created**. These map to the layer names in `STRUCTURE.md`/`DESIGN.md`: the per-version scoring envs are the **Version Layer**, the analysis `.venv` is the **Analysis Layer**. See `STRUCTURE.md` for the exists-vs-planned legend.
+> **Implementation status (2026-07-01, paths updated 2026-07-03).** The two-tier env model below is the **target**. The analysis `.venv` exists; the per-version scoring envs live under `src/envs/{v1,v2,v3}/` (currently built at `src/model/envs/…`, pending the 2026-07-03 rename to `src/envs/`). These map to the layer names in `STRUCTURE.md`/`DESIGN.md`: the per-version scoring envs are the **Version Layer**, the analysis `.venv` is the **Analysis Layer**. Envs are **source-agnostic** (an env is a library stack) — not duplicated per synthetic/real. See `STRUCTURE.md` for the exists-vs-planned legend and the full directory reorg.
 
 ## Why Environments Matter
 
 A Python "environment" is an isolated set of installed packages and their versions. Different projects — or different model versions — often require incompatible package versions. Environments prevent those conflicts from breaking each other.
+
+> **For this project it is not "often" — it is confirmed.** The three FTTL model versions (v1, v2, v3) each have a **genuinely different, mutually incompatible** library stack: every version's pickle is bound to the *exact* XGBoost / scikit-learn / numpy releases it was serialised with, and those releases differ across versions and cannot coexist in one Python process. See `DESIGN.md` § "Model Scoring & Environment Isolation" and `problem.md` §2.5 #7.
 
 ## Tooling — the Allianz team standard is `uv`
 
@@ -43,11 +45,13 @@ uv add dowhy econml           # add a dependency (updates pyproject.toml + uv.lo
 
 Each per-version env is a **frozen reproduction** of the libraries its model was serialised with. It must:
 
-1. **Match that version's pins exactly** — a model pickled under XGBoost 1.5 generally needs XGBoost 1.5 to load and predict identically.
+1. **Match that version's pins exactly** — a model pickled under XGBoost 1.5 needs XGBoost 1.5 to load and predict identically; a mismatched release raises on load or silently changes behaviour (a pickle is bound to the *exact* library version it was serialised with).
 2. **Stay isolated from the other versions** — upgrading v2's stack must not move v1's or v3's. **v1, v2 and v3 are each a fully separate environment** (this project does *not* share one env across v2/v3).
 3. **Not be perturbed by analysis work** — running `uv add something` for the pipeline must never touch a scoring env.
 
 Folding the version envs into the analysis `pyproject.toml` would couple all of that together — the exact opposite of isolation. So each version keeps its **own** spec, outside the analysis project, and is scored in its **own process** (offline → parquet; the analysis runtime loads no model). See `DESIGN.md` for the offline-scoring design.
+
+> **Why "just install all three repos as packages into one env" does not achieve this.** A recurring misunderstanding: installing a version's *repo* as a package makes its **code** importable, but it does **not** isolate that code's **dependencies**. A Python environment is a **flat** library pool — **one version of each library, shared by everything installed in it** (unlike npm's nested `node_modules`, which lets two packages carry different versions of the same dependency). Installing v1+v2+v3 into one `.venv` therefore forces `xgboost`/`scikit-learn`/`numpy` to a *single* resolved version; when the versions need incompatible releases (which here they do), pip either errors on resolution or installs one — and the other version's pickle then fails to load at runtime. The repo code is never the blocker; the numeric stack is. **Physically separating the environments is the only thing that provides isolation** — which is exactly what `env-v1`/`env-v2`/`env-v3` do.
 
 ---
 
@@ -65,7 +69,7 @@ Both produce three independent environments; they differ only in the strength of
 ### Directory layout (supports either option)
 
 ```
-src/model/envs/
+src/envs/
 ├── v1/
 │   ├── requirements.txt      ← Standard option (pins with ==)
 │   ├── pyproject.toml        ← Stricter option
@@ -87,23 +91,23 @@ Each version directory is self-contained, so retraining or upgrading one version
 **Standard (pinned requirements):**
 
 ```bash
-uv venv src/model/envs/v1/.venv --python 3.11
-uv pip install --python src/model/envs/v1/.venv/bin/python -r src/model/envs/v1/requirements.txt
+uv venv src/envs/v1/.venv --python 3.11
+uv pip install --python src/envs/v1/.venv/bin/python -r src/envs/v1/requirements.txt
 
-uv venv src/model/envs/v2/.venv --python 3.11
-uv pip install --python src/model/envs/v2/.venv/bin/python -r src/model/envs/v2/requirements.txt
+uv venv src/envs/v2/.venv --python 3.11
+uv pip install --python src/envs/v2/.venv/bin/python -r src/envs/v2/requirements.txt
 
-uv venv src/model/envs/v3/.venv --python 3.11
-uv pip install --python src/model/envs/v3/.venv/bin/python -r src/model/envs/v3/requirements.txt
+uv venv src/envs/v3/.venv --python 3.11
+uv pip install --python src/envs/v3/.venv/bin/python -r src/envs/v3/requirements.txt
 ```
 
 **Stricter (per-version project + lock):**
 
 ```bash
 # one tiny uv project per version; uv sync builds env-vX/.venv from its own lock
-( cd src/model/envs/v1 && uv sync )
-( cd src/model/envs/v2 && uv sync )
-( cd src/model/envs/v3 && uv sync )
+( cd src/envs/v1 && uv sync )
+( cd src/envs/v2 && uv sync )
+( cd src/envs/v3 && uv sync )
 ```
 
 ---
@@ -114,14 +118,14 @@ Each model version is scored **offline, inside its own env**, and the prediction
 
 ```bash
 # Standard envs — call each env's interpreter directly
-src/model/envs/v1/.venv/bin/python src/scoring/predict.py --model models/v1.pkl \
-    --features src/data/scores/features/features_v1.parquet --version v1 \
-    --out src/data/scores/v1_scores.parquet
+src/envs/v1/.venv/bin/python src/scoring/predict.py --model src/models/synthetic/baseline/v1.pkl \
+    --features src/data/synthetic/inputs/features_v1.parquet --version v1 \
+    --out src/data/synthetic/detection/v1_scores.parquet
 
 # Stricter (project) envs — uv run --project selects that version's env
-uv run --project src/model/envs/v2 python src/scoring/predict.py --model models/v2.pkl \
-    --features src/data/scores/features/features_v2.parquet --version v2 \
-    --out src/data/scores/v2_scores.parquet
+uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/synthetic/baseline/v2.pkl \
+    --features src/data/synthetic/inputs/features_v2.parquet --version v2 \
+    --out src/data/synthetic/detection/v2_scores.parquet
 ```
 
 `src/scoring/run_all.sh` wraps all three versions. The script is **version-agnostic** — the active env plus the CLI args decide which version is scored. See `DESIGN.md` for the full design and the superseded runtime-subprocess alternative.
@@ -140,7 +144,7 @@ Analysis env (.venv):
 
 Per-version envs (env-v1 / env-v2 / env-v3):
   build once from each version's own spec (requirements.txt OR pyproject.toml+uv.lock)
-  score each version offline in its own process → scores/*.parquet
+  score each version offline in its own process → data/<source>/detection/*_scores.parquet
   analysis reads the parquet; never loads a model
 ```
 
@@ -148,9 +152,9 @@ Commit `pyproject.toml` + `uv.lock` (analysis), and each version's spec files, s
 
 ## Adding a new model version (e.g., v4)
 
-1. Create `src/model/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env.
-2. Produce `features_v4.parquet` (v4's own preprocessing on real data; on synthetic, `export_version_features` emits it once the version is registered).
+1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env.
+2. Produce `data/<source>/inputs/features_v4.parquet` (v4's own preprocessing on real data; on synthetic, `export_version_features` emits it once the version is registered), and regenerate `src/models/<source>/baseline/v4.pkl` by retraining v4's repo code in `env-v4`.
 3. Add one scoring line for v4 to `src/scoring/run_all.sh`.
-4. Add `"v4": ".../v4_scores.parquet"` to the `score_paths` dict in the analysis.
+4. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis.
 
 No new class is required — `predict.py` and `scores.py` are version-agnostic. See `DESIGN.md`.

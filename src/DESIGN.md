@@ -1,6 +1,6 @@
 # Design Pattern
 
-> **Implementation status (2026-07-01).** This document describes the **target** design. Of the components below, only `config.py`, the design docs, the empty `pipeline/` `detector/` `mitigator/` package dirs, and the `data/synthetic/` generation tree exist today; `scoring/predict.py`, `scoring/run_all.sh`, and `model/envs/{v1,v2,v3}/` are **not yet created**. On synthetic data the per-version feature files already exist at `data/synthetic/parquet/features/features_<tag>.parquet`; the `data/scores/` paths in `run_all.sh` below are the real-data target. See `STRUCTURE.md` (exists-vs-planned legend) for the authoritative status. The two layers named there map onto this doc as: **Version Layer** = the per-version scoring/(re)train envs; **Analysis Layer** = the pipeline/detector/mitigator that loads no model.
+> **Implementation status (2026-07-01, paths updated 2026-07-03).** This document describes the **target** design. Of the components below, only `config.py`, the design docs, the empty `pipeline/` `detector/` `mitigator/` package dirs, and the `data/synthetic/` generation tree exist today; `scoring/predict.py`, `scoring/run_all.sh`, and `envs/{v1,v2,v3}/` are **not yet created**. On synthetic data the per-version feature files already exist at `data/synthetic/parquet/features/features_<tag>.parquet` (target home after the reorg: `data/synthetic/inputs/`). See `STRUCTURE.md` for the authoritative status and the 2026-07-03 directory reorg (source→stage data layout, `src/envs/`, `src/models/{synthetic,real}/{baseline,mitigated}/`). The two layers named there map onto this doc as: **Version Layer** = the per-version scoring/(re)train envs; **Analysis Layer** = the pipeline/detector/mitigator that loads no model.
 
 ## Strategy Pattern
 
@@ -36,7 +36,23 @@ This means swapping synthetic data for real data, or swapping one detection algo
 
 ### The problem
 
-All three model versions (v1, v2, v3) are preserved as serialised files within Allianz's internal systems. However, they **do not share a single set of library dependencies** (exact versions TBC — likely differing XGBoost or scikit-learn releases; v1 clearly diverges, and v2/v3 are not assumed identical either). Loading two versions in the same Python process will cause import conflicts. The project therefore gives **each version its own independently pinned environment** — `env-v1`, `env-v2`, `env-v3`, all three managed separately — so upgrading or retraining one version can never silently mutate another's.
+All three model versions (v1, v2, v3) are preserved as serialised files within Allianz's internal systems. **Every model version has a genuinely different, mutually incompatible library environment** — this is confirmed, not a "likely". Each version's pickle is bound to the **exact** third-party library versions it was serialised with (its own XGBoost, scikit-learn, and numpy releases), and those versions **differ across v1, v2, and v3** and cannot coexist in a single Python process. The project therefore gives **each version its own independently pinned environment** — `env-v1`, `env-v2`, `env-v3`, all three managed separately — so upgrading or retraining one version can never silently mutate another's.
+
+#### Why "just install every version's repo into one env" does **not** work
+
+This is the single most misunderstood point, so it is stated explicitly. The blocker is **not** the repos' own source code — that installs fine. The blocker is the **third-party numeric stack** each pickle is bound to.
+
+- **A pickle stores class *references* + fitted *state*, never source code.** `joblib.load("v1.pkl")` reconstructs the pipeline by *importing* both (a) the version repo's custom transformer classes **and** (b) the exact library classes the pipeline was built from (`xgboost.sklearn.XGBClassifier`, `sklearn.pipeline.Pipeline`, numpy dtypes). Every one of those imports must resolve **at a compatible version**, or the load raises (`AttributeError` / `InconsistentVersionWarning` / a booster-format error). Having the repo code present is **necessary but not sufficient** — the exact numeric stack must match the pickle's provenance too.
+- **A Python environment is a *flat* library pool: one version of each library, period.** Installing packages does **not** isolate their dependencies. If you `uv pip install -e model_repos/{v1,v2,v3}` into one `.venv`, pip must resolve `xgboost` (and `scikit-learn`, `numpy`) to a **single** version shared by all three. When v1 needs (say) `xgboost==1.7` and v3 needs `xgboost==2.1`, that is physically unsatisfiable — pip either errors on resolution, or installs one and the *other* version's pickle then fails to load at runtime.
+- **This is unlike npm.** Node's nested `node_modules` lets two packages carry different versions of the same dependency; Python's flat `site-packages` cannot. So `pip install`-ing the repos gives you their code, **not** dependency isolation. The **only** thing that provides isolation is physically separating the environments.
+
+| Approach | Repo code present? | Different lib versions coexist? | Works when versions incompatible? |
+|---|---|---|---|
+| One `.venv`, install all three repos as packages | ✅ yes | ❌ no (flat `site-packages`, one xgboost/sklearn) | ❌ **no** |
+| One `.venv`, `sys.path` swap per version | ✅ yes | ❌ no (still one installed numeric stack) | ❌ **no** |
+| **Separate `env-v1`/`env-v2`/`env-v3`** | ✅ yes | ✅ yes (each env its own stack) | ✅ **yes** |
+
+The first two rows only work in the special case where v1/v2/v3 happen to share a compatible numeric stack — which for this project they **do not**. Hence the per-version environment split is mandatory, not a tidiness choice.
 
 Model versions will also continue to be updated over time, so the design must absorb a new version (v4, v5, …) without code changes or new classes.
 
@@ -57,20 +73,20 @@ Because the two stages never share a process, there is no parent/child coordinat
 [ Scoring stage — run once per version, each in its own env ]
 
   uv env: env-v1                          src/scoring/predict.py
-  ┌───────────────────────────┐           --model    models/v1.pkl
-  │ joblib.load("v1.pkl")     │  ───────▶ --features  features_v1.parquet   ← per-version
+  ┌───────────────────────────┐           --model    models/synthetic/baseline/v1.pkl
+  │ joblib.load(v1 baseline)  │  ───────▶ --features  data/synthetic/inputs/features_v1.parquet   ← per-version
   │ predict_proba(X)[:,1]     │           --version   v1
-  │ → parquet                 │           --out       scores/v1_scores.parquet
+  │ → parquet                 │           --out       data/synthetic/detection/v1_scores.parquet
   └───────────────────────────┘
 
   uv env: env-v2                          (same script, different env + args)
-  ┌───────────────────────────┐           --model models/v2.pkl --features features_v2.parquet → v2_scores.parquet
-  │ joblib.load("v2.pkl")     │  ───────▶
+  ┌───────────────────────────┐           --model models/synthetic/baseline/v2.pkl
+  │ joblib.load(v2 baseline)  │  ───────▶ --features data/synthetic/inputs/features_v2.parquet → detection/v2_scores.parquet
   └───────────────────────────┘
 
   uv env: env-v3                          (same script, different env + args)
-  ┌───────────────────────────┐           --model models/v3.pkl --features features_v3.parquet → v3_scores.parquet
-  │ joblib.load("v3.pkl")     │  ───────▶
+  ┌───────────────────────────┐           --model models/synthetic/baseline/v3.pkl
+  │ joblib.load(v3 baseline)  │  ───────▶ --features data/synthetic/inputs/features_v3.parquet → detection/v3_scores.parquet
   └───────────────────────────┘
 
                     │  v1_scores.parquet   claim_id | model_v1_score
@@ -95,7 +111,7 @@ Each version is scored on its **own** model-ready feature file — `features_v1.
 **Why per-version rather than one shared file.** On the real data, scoring all versions on a single feature matrix would **not reproduce the production scores** and would fold a preprocessing artefact into any cross-version score-drift comparison, masquerading as SFP signal. The per-version contract removes that confound by construction: each model is always scored on the features *it* would actually see. The synthetic path adopts the same contract so that the analysis code, the scoring scripts, and the `RealDataLoader` are structurally identical across both — the only thing that changes is whether the files happen to be equal.
 
 **Producing the files.**
-- *Synthetic:* `src/data/synthetic/run.py` → `export_version_features(df, X_all)` writes `parquet/features/features_<tag>.parquet` for every version (`v1, v2a, v2b, v3a, v3b`). Identical by construction; the redundancy is deliberate and documents the invariant.
+- *Synthetic:* `src/data/synthetic/run.py` → `export_version_features(df, X_all)` writes `features_<tag>.parquet` for every version (`v1, v2a, v2b, v3a, v3b`) — currently under `parquet/features/`, target home `data/synthetic/inputs/` after the reorg. Identical by construction; the redundancy is deliberate and documents the invariant.
 - *Real:* each version's preprocessing emits its own `features_<version>.parquet` — feasible only if that version's preprocessing code/artefact can be re-run (cf. environment-isolation constraint, `problem.md` §2.5 #7). Where a version's preprocessing cannot be reconstructed, that version is limited to **symptom tracking** (its own emitted scores/decisions) and excluded from the leakage-free quantitative comparison (`problem.md` §2.5 #9).
 
 ### Implementation
@@ -165,7 +181,7 @@ if __name__ == "__main__":
     main()
 ```
 
-> **Re-evaluation loop.** `SFPMitigator` (analysis env) writes `data/scores/labels/<v>_corrected.parquet` → `retrain.py` (version env) fits `<v>_mitigated.pkl` → `predict.py` (version env) emits `<v>_mitigated_scores.parquet` → `SFPDetector` (analysis env) compares baseline vs mitigated. Same file-only decoupling as scoring; no model is ever loaded in the analysis env.
+> **Re-evaluation loop.** `SFPMitigator` (analysis env) writes `data/synthetic/mitigation/<v>_corrected.parquet` → `retrain.py` (version env) fits `models/synthetic/mitigated/<v>.pkl` → `predict.py` (version env) emits `data/synthetic/reeval/<v>_mitigated_scores.parquet` → `SFPDetector` (analysis env) compares baseline vs mitigated. Same file-only decoupling as scoring; no model is ever loaded in the analysis env. (Real-data source uses the identical `data/real/…` + `models/real/…` layout.)
 
 ### Where per-version code lives — training (shared) vs preprocessing (per-version)
 
@@ -176,28 +192,30 @@ Two version-specific concerns with **opposite** structures — the single most i
 
 > **Rule of thumb:** *same* procedure across versions → shared module + per-version config; *genuinely different* procedure → strategy implementation per version. Training is the former; preprocessing is the latter. Both still **execute in the Version Layer** (the version's own env), because both feed / run the model.
 
-**`src/scoring/run_all.sh`** — orchestrates all versions, each in its **own** uv env, so each scoring run is a separate process (import conflicts are structurally impossible). v1, v2 and v3 each have their own environment. Below uses the **stricter** per-version layout (`uv run --project`); with the standard layout call each env's interpreter directly (`src/model/envs/v1/.venv/bin/python …`). See `ENV_MANAGEMENT.md` for both.
+**`src/scoring/run_all.sh`** — orchestrates all versions, each in its **own** uv env, so each scoring run is a separate process (import conflicts are structurally impossible). v1, v2 and v3 each have their own environment. Below uses the **stricter** per-version layout (`uv run --project`); with the standard layout call each env's interpreter directly (`src/envs/v1/.venv/bin/python …`). See `ENV_MANAGEMENT.md` for both. `SOURCE` selects the data source (`synthetic` or `real`) — the whole tree mirrors under `data/<source>/` + `models/<source>/`.
 
 ```bash
 #!/usr/bin/env bash
 # Score every model version, each in its own env, on its OWN feature file.
 set -euo pipefail
 
-FEATDIR="src/data/scores/features"   # per-version: features_v1.parquet, features_v2.parquet, …
-OUTDIR="src/data/scores"
-ENVDIR="src/model/envs"
+SOURCE="${1:-synthetic}"                        # synthetic | real
+FEATDIR="src/data/$SOURCE/inputs"               # per-version: features_v1.parquet, features_v2.parquet, …
+MODELDIR="src/models/$SOURCE/baseline"          # baseline pkls (production reproduction)
+OUTDIR="src/data/$SOURCE/detection"             # baseline scores → detector
+ENVDIR="src/envs"
 mkdir -p "$OUTDIR"
 
 uv run --project "$ENVDIR/v1" python src/scoring/predict.py \
-    --model models/v1.pkl --features "$FEATDIR/features_v1.parquet" --version v1 \
+    --model "$MODELDIR/v1.pkl" --features "$FEATDIR/features_v1.parquet" --version v1 \
     --out "$OUTDIR/v1_scores.parquet"
 
 uv run --project "$ENVDIR/v2" python src/scoring/predict.py \
-    --model models/v2.pkl --features "$FEATDIR/features_v2.parquet" --version v2 \
+    --model "$MODELDIR/v2.pkl" --features "$FEATDIR/features_v2.parquet" --version v2 \
     --out "$OUTDIR/v2_scores.parquet"
 
 uv run --project "$ENVDIR/v3" python src/scoring/predict.py \
-    --model models/v3.pkl --features "$FEATDIR/features_v3.parquet" --version v3 \
+    --model "$MODELDIR/v3.pkl" --features "$FEATDIR/features_v3.parquet" --version v3 \
     --out "$OUTDIR/v3_scores.parquet"
 
 echo "All versions scored → $OUTDIR"
@@ -222,13 +240,13 @@ def load_scores(score_paths: dict[str, str], id_col: str = "claim_id") -> pd.Dat
 
 ### env spec files (still required, for reproducibility)
 
-Each version keeps its **own** spec under `src/model/envs/<version>/`, used to *build* the env — not to locate an interpreter at runtime. **v1, v2 and v3 are each a separate environment** (no shared `env-v2v3`). There are two ways to pin each one (see `ENV_MANAGEMENT.md` for full detail):
+Each version keeps its **own** spec under `src/envs/<version>/`, used to *build* the env — not to locate an interpreter at runtime. **v1, v2 and v3 are each a separate environment** (no shared `env-v2v3`). These envs are **source-agnostic** — an env is a library stack, so it is *not* duplicated per synthetic/real. There are two ways to pin each one (see `ENV_MANAGEMENT.md` for full detail):
 
 - **Standard** — a pinned `requirements.txt` (pins with `==`), built via `uv venv` + `uv pip install -r`. Direct deps only, no lockfile.
 - **Stricter** — a per-version `pyproject.toml` + `uv.lock`, built via `uv sync`. Captures transitive deps + hashes → byte-for-byte reproducible. Preferred for dissertation-grade reproducibility.
 
 ```
-src/model/envs/
+src/envs/
 ├── v1/   requirements.txt   (and/or pyproject.toml + uv.lock)
 ├── v2/   requirements.txt   (and/or pyproject.toml + uv.lock)
 └── v3/   requirements.txt   (and/or pyproject.toml + uv.lock)
@@ -238,10 +256,10 @@ Each version retains an independent spec even when dependencies currently coinci
 
 ### Adding a new model version (e.g., v4)
 
-1. Create `src/model/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env (`uv sync` in that dir, or `uv venv` + `uv pip install -r`).
-2. Produce `features_v4.parquet` (v4's own preprocessing on real data; on synthetic, `export_version_features` already emits it once the version is registered).
-3. Add one scoring line for v4 to `run_all.sh` (`uv run --project src/model/envs/v4 python src/scoring/predict.py … --features features_v4.parquet --version v4 --out scores/v4_scores.parquet`).
-4. Add `"v4": ".../v4_scores.parquet"` to the `score_paths` dict in the analysis.
+1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env (`uv sync` in that dir, or `uv venv` + `uv pip install -r`).
+2. Produce `data/<source>/inputs/features_v4.parquet` (v4's own preprocessing on real data; on synthetic, `export_version_features` already emits it once the version is registered), and regenerate `models/<source>/baseline/v4.pkl` by retraining v4's repo code in `env-v4`.
+3. Add one scoring line for v4 to `run_all.sh` (`uv run --project src/envs/v4 python src/scoring/predict.py … --features data/<source>/inputs/features_v4.parquet --version v4 --out data/<source>/detection/v4_scores.parquet`).
+4. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis.
 
 No new class. `predict.py` and `scores.py` are unchanged — they are version-agnostic.
 
@@ -262,7 +280,7 @@ This suits the research workload: a fixed feature set is scored across versions 
 
 > **Status: superseded 2026-06-25** by the offline-precompute design above. Preserved here as a record of the design path and the rationale for the change — not current. The text below describes what *was* proposed.
 
-The original plan exposed a `ModelLoader` abstraction with two implementations: `InProcessModelLoader` (v2/v3, same env as the app) and `SubprocessModelLoader(model_path, env_spec)` (v1, different env). The environment was passed as a parameter (`env_spec`, a YAML file under `src/model/envs/` holding `python_executable`), not encoded in a subclass, so new versions needed no new class.
+The original plan exposed a `ModelLoader` abstraction with two implementations: `InProcessModelLoader` (v2/v3, same env as the app) and `SubprocessModelLoader(model_path, env_spec)` (v1, different env). The environment was passed as a parameter (`env_spec`, a YAML file under `src/envs/` holding `python_executable`), not encoded in a subclass, so new versions needed no new class.
 
 At call time, `SubprocessModelLoader.predict_proba(X)` would: serialise `X` to a temp `.npy` file → spawn a child process with v1's interpreter (`subprocess.run([...])`) running a version-agnostic `worker.py` → the worker loaded the model, ran `predict_proba`, and printed the scores as JSON to **stdout** → the parent captured stdout (`capture_output=True`), parsed the JSON back into a NumPy array, and deleted the temp file. The caller (`SFPDetector`) saw a uniform `predict_proba` and never knew whether a subprocess was used.
 
