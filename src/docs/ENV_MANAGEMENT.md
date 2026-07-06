@@ -28,7 +28,7 @@ This project runs **two kinds of environment** with **opposite lifecycles**, so 
 | Tier | What runs in it | uv mechanism | Spec files | Lifecycle |
 |---|---|---|---|---|
 | **Analysis env** (`.venv`) | The SFP pipeline, detector, mitigator, EDA, notebooks — everything that does **not** load a model | `uv add` / `uv sync` | `pyproject.toml` + `uv.lock` (repo root) | **Evolving** — packages added as research grows |
-| **Per-version scoring envs** (`env-v1`, `env-v2`, `env-v3`) | Nothing but `predict.py`, scoring **one** model version's serialised artefact offline | one independent env per version | one **independent** pinned spec per version | **Frozen** — write-once; rebuilt only to reproduce, never casually mutated |
+| **Per-version model envs** (`env-v1`, `env-v2`, `env-v3`) | Anything that loads or builds **one** version's model: `train.py` (baseline), `retrain.py` (mitigated), `predict.py` (scoring) — offline | one independent env per version | one **independent** pinned spec per version | **Frozen** — write-once; rebuilt only to reproduce, never casually mutated |
 
 ### Why the analysis env uses `uv add` + `pyproject.toml` + `uv.lock`
 
@@ -130,7 +130,7 @@ uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/sy
 
 `src/scoring/score_all.sh` wraps all three versions. The script is **version-agnostic** — the active env plus the CLI args decide which version is scored. See `DESIGN.md` for the full design and the superseded runtime-subprocess alternative.
 
-**Re-training and preprocessing also run in the per-version env.** `src/scoring/retrain.py` (re-evaluation) and `src/scoring/preprocess.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py`. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. Note the *training protocol* (`src/training/`) is shared across versions and env-agnostic (pure pandas/sklearn + an injected estimator), whereas *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
+**Training, re-training and preprocessing also run in the per-version env.** `src/training/train.py` (baseline pkl), `src/training/retrain.py` (mitigated pkl, re-evaluation) and `src/preprocessing/v{1,2,3}.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py` — because all load or build that version's model and so need its repo importable. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. The **log-ingestion** step (`scoring/ingest.py` → `logs/<v>.parquet`) and the log→inputs split (`build_inputs.py`) touch no model and run in the analysis `.venv`. Note *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
 
 ---
 
@@ -153,8 +153,8 @@ Commit `pyproject.toml` + `uv.lock` (analysis), and each version's spec files, s
 ## Adding a new model version (e.g., v4)
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env.
-2. Produce `data/<source>/inputs/features_v4.parquet` (v4's own preprocessing on real data; on synthetic, `export_version_features` emits it once the version is registered), and regenerate `src/models/<source>/baseline/v4.pkl` by retraining v4's repo code in `env-v4`.
+2. Register v4's emitted log in `data/<source>/logs/manifest.json`, then run `ingest.py` + `build_inputs.py` to produce `data/<source>/inputs/{features,labels}_v4.parquet` (on synthetic, `export_version_features` also emits features once the version is registered). Regenerate `src/models/<source>/baseline/v4.pkl` by running `train.py` in `env-v4` (add a v4 line to `train_all.sh`).
 3. Add one scoring line for v4 to `src/scoring/score_all.sh`.
 4. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis.
 
-No new class is required — `predict.py` and `load_scores.py` are version-agnostic. See `DESIGN.md`.
+No new class is required — `ingest.py`, `build_inputs.py`, `train.py`, `predict.py`, and `load_scores.py` are all version-agnostic. See `DESIGN.md`.

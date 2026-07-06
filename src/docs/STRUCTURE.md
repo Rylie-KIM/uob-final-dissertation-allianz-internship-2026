@@ -30,15 +30,18 @@ repo/
     │   └── base.py · synthetic.py · real.py
     │
     ├── scoring/
+    │   ├── ingest.py          # source log (manifest) → logs/<v>.parquet
+    │   ├── build_inputs.py    # logs/<v>.parquet → inputs/{features,labels}_<v>
     │   ├── predict.py
-    │   ├── retrain.py
     │   ├── score_all.sh
-    │   ├── build_inputs.py
     │   └── load_scores.py
     ├── preprocessing/
     │   ├── base.py
     │   └── v1.py · v2.py · v3.py
     ├── training/
+    │   ├── train.py           # BASELINE trainer (prep+model fresh on production label)
+    │   ├── retrain.py         # MITIGATED retrainer (reuse baseline prep, weighted)
+    │   ├── train_all.sh
     │   └── spec.py
     ├── envs/
     │   └── v1/ · v2/ · v3/
@@ -57,11 +60,13 @@ repo/
         │   ├── generate/
         │   ├── script/
         │   ├── csv/ · parquet/
+        │   ├── logs/          # manifest.json + <v>.parquet (canonical ingested logs)
         │   ├── inputs/
         │   ├── detection/
         │   ├── mitigation/
         │   └── reeval/
         └── real/
+            ├── logs/
             ├── inputs/
             ├── detection/
             ├── mitigation/
@@ -82,9 +87,11 @@ repo/
 
 > **Legend:** `[now]` = exists on disk today · `[plan]` = target design, not yet created · `[move]` = exists on disk but under the *old* path, pending the reorg above. **The `src/` application code was scaffolded on 2026-07-01 and then deleted the same day** (it was premature); everything under the layer headings is therefore `[plan]` again. The design it describes still stands; only the code is gone.
 
-> **Note — `data/` is data-only; code lives in the layer packages.** Source-first means the synthetic *generator* (`run.py`, `generate/`, `script/`, `csv/`, `parquet/`) and the *staged artefacts* (`inputs/…reeval/`) sit under the **same** `data/synthetic/` node — the generator is what makes this source. The four stage dirs mirror exactly under `data/real/` (which has no generator — real data arrives from Allianz). Analysis/pipeline **code never lives in `data/`**: score-ingestion (`load_scores.py`) and log-bridging (`build_inputs.py`) live under `scoring/`, and the planned `DataLoader` classes under `loaders/` — keeping `data/` purely for stored artefacts.
+> **Note — `data/` is data-only; code lives in the layer packages.** Source-first means the synthetic *generator* (`run.py`, `generate/`, `script/`, `csv/`, `parquet/`) and the *staged artefacts* (`logs/`, `inputs/…reeval/`) sit under the **same** `data/synthetic/` node — the generator is what makes this source. The stage dirs (`logs/` + the four `inputs/…reeval/`) mirror exactly under `data/real/` (which has no generator — real data arrives from Allianz). Analysis/pipeline **code never lives in `data/`**: log-ingestion (`ingest.py`), the log→inputs split (`build_inputs.py`), and score-ingestion (`load_scores.py`) live under `scoring/`, and the planned `DataLoader` classes under `loaders/` — keeping `data/` purely for stored artefacts.
 
-> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/{predict,retrain}.py`, `score_all.sh`, `build_inputs.py`, `load_scores.py`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
+> **Note — log ingestion is the one name-translation point (added 2026-07-06).** Each model application emits its production log under whatever name IT chose (`log_v2.parquet` here; on real data e.g. `v2_prod_scored_2025Q1.parquet`). This pipeline expects one canonical per-version name, `logs/<v>.parquet`. `scoring/ingest.py` is the SINGLE place that translates "their name → our name": it reads the source path from `data/<source>/logs/manifest.json`, validates the required schema (`claim_id`, `observed_outcome`, `true_garage_outcome`, `model_<v>_decision`), and archives a copy as `logs/<v>.parquet`. Everything downstream (`build_inputs.py`) reads only the canonical `logs/`, so when a file name changes you edit `manifest.json` alone — no pipeline code changes.
+
+> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/{ingest,build_inputs,predict}.py`, `score_all.sh`, `load_scores.py`); the **training I/O** (`training/train.py` = baseline trainer, `training/retrain.py` = mitigated retrainer, `train_all.sh`); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
 
 > **Per-version features, built through each version's own repo (both sources).** Each version is scored on its own `inputs/features_<v>.parquet`, produced by **that version's repo preprocessing** — the `preprocessing/v{1,2,3}.py` adapters run each repo's feature builder. This is now **identical for synthetic and real** (decided 2026-07-03): synthetic is only a temporary stand-in, so it goes through the *same* external-repo path, not a special shared recipe. The single difference is where the raw claims come from — synthetic **generates** them (`data/synthetic/` DGP), real **receives** them from Allianz. Because v1/v2/v3 preprocessing genuinely diverges (`V2/V3FeatureBuilder`; `problem.md` §2.5 #10/#11), `features_<v>` files differ across versions on **both** sources. See `DESIGN.md` § "Per-version feature matrices".
 
@@ -109,6 +116,13 @@ SFPDetector → DetectionReport
 Scoring and analysis are decoupled — they never share a process. See `DESIGN.md` for full rationale (the runtime subprocess loader was superseded 2026-06-25). Paths below use the synthetic source; the real source has the identical `data/real/…` layout.
 
 ```
+[ Data preparation — run once, upstream of scoring ]
+
+  ingest.py        source log (logs/manifest.json)  → data/synthetic/logs/<v>.parquet        (canonical name)
+  build_inputs.py  logs/<v>.parquet split           → data/synthetic/inputs/{features,labels}_<v>.parquet
+  train_all.sh     features_<v> + production label   → models/synthetic/baseline/<v>.pkl      (BASELINE, each in env-v)
+                              │  (train.py fits prep+model FRESH; baseline pkls are gitignored → regenerated here)
+                              ▼
 [ Scoring — run once per version, each in its OWN env ]
 
   env-v1  python predict.py --model models/synthetic/baseline/v1.pkl \
@@ -145,9 +159,10 @@ Analysis env   SFPDetector(baseline_scores vs mitigated_scores) → SFP metric d
 
 | Component | Runs in | Notes |
 |---|---|---|
+| `training/train.py` baseline v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; fits prep+model FRESH on the production label → `models/…/baseline/v<k>.pkl` |
 | `predict.py` scoring v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; isolated process; writes `detection/*_scores.parquet` |
-| `retrain.py` re-train v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; re-evaluation step; fits on corrected labels → `models/…/mitigated/v<k>.pkl` |
-| `main.py`, pipeline, detector, mitigator, `load_scores.py` | analysis env (`.venv`) | `uv add`/`uv sync` → `pyproject.toml` + `uv.lock`; reads precomputed parquet, no model dependency |
+| `training/retrain.py` re-train v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; re-evaluation step; reuses baseline prep, fits weighted on corrected labels → `models/…/mitigated/v<k>.pkl` |
+| `ingest.py`, `build_inputs.py`, pipeline, detector, mitigator, `load_scores.py` | analysis env (`.venv`) | `uv add`/`uv sync` → `pyproject.toml` + `uv.lock`; reads precomputed parquet, no model dependency |
 
 > **Two environment tiers.** The analysis `.venv` is one evolving env managed by `uv add` (`pyproject.toml` + `uv.lock`). The per-version scoring envs (`env-v1`/`env-v2`/`env-v3`, under `src/envs/`) are frozen, independently pinned, and managed separately — never folded into the analysis `pyproject.toml`. See `ENV_MANAGEMENT.md`.
 
@@ -156,9 +171,9 @@ Analysis env   SFPDetector(baseline_scores vs mitigated_scores) → SFP metric d
 When a new version (e.g., v4) arrives with different dependencies:
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock`) and build the env (`uv sync` in that dir, or `uv venv` + `uv pip install -r`)
-2. Provide `data/<source>/inputs/features_v4.parquet` (v4's own preprocessing on real data; on synthetic, register the version and `export_version_features` emits it)
-3. Regenerate the baseline pkl into `models/<source>/baseline/v4.pkl` by retraining v4's repo code in `env-v4`
+2. Add `"v4": "<path to v4's emitted log>"` to `data/<source>/logs/manifest.json`, then `python src/scoring/ingest.py` (→ `logs/v4.parquet`) and `python src/scoring/build_inputs.py` (→ `inputs/{features,labels}_v4.parquet`)
+3. Regenerate the baseline pkl into `models/<source>/baseline/v4.pkl` by running `train.py` in `env-v4` (add a v4 line to `train_all.sh`)
 4. Add one `uv run --project src/envs/v4 python src/scoring/predict.py … --features data/<source>/inputs/features_v4.parquet --version v4` line to `score_all.sh`
 5. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis
 
-No new class required. `predict.py`, `retrain.py`, and `load_scores.py` are all version-agnostic and run unchanged — the active env plus the CLI args (`--model`, `--features`, `--labels`, `--version`) decide which version is scored or retrained.
+No new class required. `ingest.py`, `build_inputs.py`, `train.py`, `predict.py`, `retrain.py`, and `load_scores.py` are all version-agnostic and run unchanged — the active env plus the CLI args (`--model`, `--features`, `--labels`, `--version`) decide which version is trained, scored, or retrained.
