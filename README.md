@@ -14,6 +14,20 @@ Identifying and Mitigating Self-Fulfilling Prophecy Loops in Machine Learning
 
 
 # Business Context
+
+## ⭐ Pre-ML Baseline — the human era, before any model existed (reference figures)
+
+> **These are the most important reference numbers for the whole SFP story.** They quantify the *pre-model, human-based* loop that every model version inherited.
+
+Before any ML model was deployed, whether a car was scrapped (written off as total loss) was determined by a mix of **predefined rules** (e.g. *if a car flips over it is automatically a total loss*) and **handler judgement**.
+
+| Pre-ML figure | Value | What it means for SFP |
+|---|---|---|
+| **% of all cars scrapped** | **15%** | The human-era baseline scrap rate — the reference point the ML-era rate (~18–19% under v2a/v3a) should be compared against. Scrap inflation above 15% is the headline symptom. |
+| **% of scrapped cars fast-tracked for TL** (handler-identified, **did *not* go to the garage**) | **43%** | Nearly half of all write-offs were **forced labels with no garage verification** — a handler decided total loss and the car was never independently assessed. This is the **pre-ML human-based SFP loop quantified**: 43% of the positive labels in the pre-ML era are structurally unverifiable (`pre_ml_label` contamination). The remaining ~57% of scrapped cars did reach a garage and carry an engineer (ground-truth) outcome. |
+
+**Why this matters.** v1 was trained on `pre_ml_label`, in which ~43% of the total-loss labels are handler-forced and never garage-checked (see §"Why there is no ground truth"). This figure is the concrete size of the contamination v1 inherited *before* the model-based loop ever began — the human loop the ML loop then amplified. (Source figures provided by the Allianz team; to be reconciled with the real logs when available.)
+
 ## Summary of 2 expected benefits from the ML model 
 1. reduce the process, cost, and time for total loss cars 
 2. predicting total loss car accuarately is important, since if the car is classified as a total loss, the insurance company has to pay the whole car vlaue. 
@@ -41,11 +55,14 @@ This means the model's reported precision is a measure of internal consistency w
 
 ### Why there is no ground truth (oracle) label
 
-Even if pre-model data existed (it has been disposed of under Insurance Company.'s data retention policy), it would not constitute a clean oracle:
-- **Handler decisions** (call centre staff) reflect inconsistent human judgment and are themselves self-fulfilling — a handler who scraps a car without sending it to a garage generates a label with no independent verification.
-- **Engineer decisions** (garage physical inspection) **are treated as ground truth** — a car the garage engineer physically assessed has a verified repair-feasibility outcome (clarified 2026-06-25). The problem is twofold: (a) in the pre-ML records it is not always possible to tell whether a given `pre_ml_label` came from an engineer (ground truth) or a handler (unverified judgment), and (b) the pre-ML data is disposed of anyway. So even the genuinely reliable engineer labels cannot be isolated and recovered. This engineer = ground-truth status applies **only to cars sent to a garage**; once a car is scrapped (by a handler or by a model) no engineer ever sees it and the oracle is permanently gone.
+Even if pre-model data existed (it has been disposed of under Insurance Company.'s data retention policy), it would not constitute a clean oracle. The two human label sources are **not** on an equal footing (supervisor decision, 2026-07-06):
 
-The model's goal is to replicate engineer-level certainty (98.5% precision) but it is evaluated against a log that conflates handler and engineer decisions, with scrapped cars never verified at all. This structural absence of oracle labels is not a data quality gap — it is the defining feature of the SFP problem in this domain.
+- **Engineer decisions** (garage physical inspection) **are the only ground truth in the entire system.** A car a garage engineer physically assessed has a verified repair-feasibility outcome. This engineer = ground-truth status applies **only to cars sent to a garage**; once a car is scrapped (by a handler or by a model) no engineer ever sees it and the oracle is permanently gone.
+- **Handler decisions** (call centre staff) are treated **unconditionally as a biased data generator — never as ground truth.** A call handler does not have the engineering knowledge to judge repair feasibility, so a handler who writes a car off without sending it to a garage produces a forced label with no independent verification. This is the original, **human-based SFP loop** that predates the ML model: handler judgment → write-off → the outcome is recorded as total loss with no way to check it → that biased label becomes evidence for the next decision. Because of this, handler-originated labels are regarded as **contaminated by construction, regardless of how confident any individual handler was** — they are not a weaker oracle, they are not an oracle at all.
+
+Two practical problems compound this: (a) in the pre-ML records it is not always possible to tell whether a given `pre_ml_label` came from an engineer (ground truth) or a handler (biased generator), so even the genuinely reliable engineer labels cannot be cleanly isolated and recovered; and (b) the pre-ML data is disposed of anyway.
+
+The model's goal was never to reproduce handler judgment — **v1 was built to *outperform* the call handler** and approach engineer-level certainty (98.5% precision). But it is trained on, and evaluated against, a log that conflates biased handler decisions with reliable engineer decisions, with scrapped cars never verified at all. This structural absence of oracle labels is not a data quality gap — it is the defining feature of the SFP problem in this domain. Note there are therefore **two nested SFP loops**: the *human-based* loop (handlers writing off without verification, embedded in `pre_ml_label`) and the *model-based* loop (§ Training Process) that inherits and amplifies it.
 
 
 # Model Training Methodology
@@ -146,12 +163,14 @@ def apply_policy(scores, tau_v):     # scores = model.predict_proba(X)[:, 1]
     return (scores >= tau_v).astype(int)   # 1 → scrap, 0 → garage
 ```
 
-- **The *form* (absolute cutoff tuned to precision ≥ 0.985) is shared; the threshold *value* τ_v is tuned per-version.** Each model's score distribution differs, so the cutoff that holds ≥ 0.985 precision differs by version. `SCRAP_THRESHOLD = 0.872` (in `src/config.py`) is the documented **real-world value for v2**, kept as the fallback τ_v when the precision target is unreachable on a validation slice; the synthetic generator's own tuned values come out near it (e.g. v1 ≈ 0.867, v2a ≈ 0.921 — distribution-dependent).
+- **The *form* (absolute cutoff tuned to precision ≥ 0.985) is shared; the threshold *value* τ_v is tuned per-version.** Each model's score distribution differs, so the cutoff that holds ≥ 0.985 precision differs by version. `SCRAP_THRESHOLD = 0.872` (in `src/config.py`) is the documented **real-world value for v2**, kept as the fallback τ_v when the precision target is unreachable on a validation slice; the synthetic generator's own tuned values come out near it (e.g. v1 ≈ 0.852, v2a ≈ 0.906 — distribution-dependent).
 - **Absolute cutoff, not a percentile.** Scrap only when the model is near-certain. The scrap *volume* therefore floats with the score distribution — this is what lets v2's upward score drift show up as a higher scrap rate.
 - `decision = 1` → car scrapped → `observed_outcome` **forced to 1** (the car is gone; the garage never sees it → self-fulfilling label).
 - `decision = 0` → car sent to garage → `observed_outcome` = the **true** repair result.
 
 ### Model v1 — trained on the pre-ML (human) era
+
+**Purpose of v1: to outperform the call handler**, not to imitate it. In the pre-ML era clear-cut write-offs were decided by call handlers, who lack the engineering knowledge to judge repair feasibility (see "Why there is no ground truth"). v1 was introduced to make those fast-track decisions more accurately and consistently than a handler could. But it was *trained* on `pre_ml_label` — labels a biased handler generator produced — so v1 inherits the human-based SFP loop it was meant to improve on: it learns from a biased teacher while aiming to beat it.
 
 ```python
 # Train rows: 2016–2021, label = pre_ml_label (handler decisions; already biased)
@@ -290,15 +309,15 @@ Confirmed with the team (2026-07-01): each production version is preserved as a 
 
 Each version tunes its own τ_v to hold precision ≥ 0.985 against the (contaminated) label. Measured on each version's OOT window (`evaluate.py` for the contaminated view, `verify_sfp_oracle.py` for the synthetic-only oracle view):
 
-| Model | Training target | Scrap rate | Contaminated prec | **Oracle prec (true)** | Status |
-|---|---|---|---|---|---|
-| v1 | `pre_ml_label` (human era) | ~12.9% | 0.986 | **0.914** | Deployed (superseded) |
-| **v2a** *(real)* | `model_v1_observed_outcome` (v1 log only) | **~19.2%** ↑ | 0.995 | **0.897** ↓ | **Currently deployed** |
-| v2b *(counterfactual)* | mixed (pre-ML + v1 log) | ~19.1% | 0.995 | 0.897 | Synthetic only — not real |
-| v3a | `model_v2a_observed_outcome` (2023+) | **~20.0%** ↑ | 0.985 | **0.888** ↓ | Attempted; not deployed (real) |
-| v3b *(counterfactual)* | `model_v2b_observed_outcome` (2023+) | ~19.7% | 0.990 | 0.892 | Synthetic only — not real |
+| Model | Training target | Scrap rate | Contaminated prec | **Oracle prec (true)** | cont−oracle gap | Status |
+|---|---|---|---|---|---|---|
+| v1 | `pre_ml_label` (human era) | ~12.5% | 0.976 | 0.974 | 0.002 | Deployed (superseded) |
+| **v2a** *(real)* | `model_v1_observed_outcome` (v1 log only) | **~18.4%** ↑ | 0.988 | 0.980 | 0.008 ↑ | **Currently deployed** |
+| v2b *(counterfactual)* | mixed (pre-ML + v1 log) | ~18.3% | 0.992 | 0.985 | 0.007 | Synthetic only — not real |
+| v3a | `model_v2a_observed_outcome` (2023+) | **~18.6%** ↑ | 0.988 | 0.972 | **0.016** ↑ | Attempted; not deployed (real) |
+| v3b *(counterfactual)* | `model_v2b_observed_outcome` (2023+) | ~18.8% | 0.983 | 0.972 | 0.011 | Synthetic only — not real |
 
-v2a/v3a inflate the scrap rate even though true repair feasibility has not changed — v1's self-fulfilling labels push later versions to over-predict total loss. **The key subtlety:** because each version re-tunes τ_v to hold precision against the *contaminated* label, the monitored (contaminated) precision stays pinned near 0.985 and **recall does not collapse in this DGP** (unlike the real v3). The loop instead surfaces as **degrading true/oracle precision** (0.914 → 0.897 → 0.888) and a widening contaminated-vs-oracle gap — the harm the business's own metrics cannot see. See `problem.md` §"How the loop manifests" and `verify_sfp_oracle.py`. v2b/v3b are counterfactual baselines only. To regenerate the datasets after any change to the policy or windows, run:
+v2a/v3a inflate the scrap rate (~12.5% → ~18.4% → ~18.6% across v1→v2a→v3a) — v1's self-fulfilling labels push later versions to over-predict total loss. **The key subtlety:** because each version re-tunes τ_v to hold precision against the *contaminated* label, the monitored (contaminated) precision stays pinned near/above 0.985 and **recall does not collapse in this DGP** (unlike the real v3). The loop instead surfaces as a **widening contaminated-vs-oracle precision gap** (0.002 → 0.008 → 0.016) — the harm the business's own metrics cannot see. **Read the gap, not the oracle-precision level:** the *level* of oracle precision is not directly comparable across versions here because the OOT windows differ in true-TL base rate (≈16.6% at v1's 2021 window vs ≈22.1% at the 2024 windows) — a year-over-year feature-drift confound, **separate from the SFP loop**, now under investigation in `notebook/00_feature_drift_EDA.ipynb`. Within a fixed window the gap isolates the loop. See `problem.md` §"How the loop manifests" and `verify_sfp_oracle.py`. v2b/v3b are counterfactual baselines only. To regenerate the datasets after any change to the policy or windows, run:
 
 ```bash
 python src/data/synthetic/run.py
