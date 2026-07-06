@@ -57,14 +57,14 @@ repo/
     └── data/
         ├── synthetic/
         │   ├── run.py · evaluate.py
-        │   ├── generate/
+        │   ├── generate/      # ← the ONLY data synthetic TESTS read (DGP output)
+        │   │   └── csv/ · parquet/   (+ parquet/features/)
         │   ├── script/
-        │   ├── csv/ · parquet/
-        │   ├── logs/          # manifest.json + <v>.parquet (canonical ingested logs)
-        │   ├── inputs/
-        │   ├── detection/
-        │   ├── mitigation/
-        │   └── reeval/
+        │   ├── logs/          #  ┐ staged-artefact dirs: NOT a test-data source —
+        │   ├── inputs/        #  │ a synthetic dry-run of the real-data pipeline,
+        │   ├── detection/     #  │ built to lock the app structure BEFORE real
+        │   ├── mitigation/    #  │ Allianz resources are wired in
+        │   └── reeval/        #  ┘ (mirror exactly under data/real/)
         └── real/
             ├── logs/
             ├── inputs/
@@ -87,7 +87,9 @@ repo/
 
 > **Legend:** `[now]` = exists on disk today · `[plan]` = target design, not yet created · `[move]` = exists on disk but under the *old* path, pending the reorg above. **The `src/` application code was scaffolded on 2026-07-01 and then deleted the same day** (it was premature); everything under the layer headings is therefore `[plan]` again. The design it describes still stands; only the code is gone.
 
-> **Note — `data/` is data-only; code lives in the layer packages.** Source-first means the synthetic *generator* (`run.py`, `generate/`, `script/`, `csv/`, `parquet/`) and the *staged artefacts* (`logs/`, `inputs/…reeval/`) sit under the **same** `data/synthetic/` node — the generator is what makes this source. The stage dirs (`logs/` + the four `inputs/…reeval/`) mirror exactly under `data/real/` (which has no generator — real data arrives from Allianz). Analysis/pipeline **code never lives in `data/`**: log-ingestion (`ingest.py`), the log→inputs split (`build_inputs.py`), and score-ingestion (`load_scores.py`) live under `scoring/`, and the planned `DataLoader` classes under `loaders/` — keeping `data/` purely for stored artefacts.
+> **Note — `data/` is data-only; code lives in the layer packages.** Source-first means the synthetic *generator* (`run.py`, `generate/` — which holds the DGP output `csv/` + `parquet/` — and `script/`) and the *staged artefacts* (`logs/`, `inputs/…reeval/`) sit under the **same** `data/synthetic/` node — the generator is what makes this source. The stage dirs (`logs/` + the four `inputs/…reeval/`) mirror exactly under `data/real/` (which has no generator — real data arrives from Allianz). Analysis/pipeline **code never lives in `data/`**: log-ingestion (`ingest.py`), the log→inputs split (`build_inputs.py`), and score-ingestion (`load_scores.py`) live under `scoring/`, and the planned `DataLoader` classes under `loaders/` — keeping `data/` purely for stored artefacts.
+
+> **Note — synthetic tests read ONLY `data/synthetic/generate/` (added 2026-07-06).** Every test / experiment / notebook that runs on synthetic data sources its data **exclusively** from `data/synthetic/generate/` — the DGP output produced by `run.py`: `generate/csv/`, `generate/parquet/`, and `generate/parquet/features/`. Nothing else counts as a synthetic test input. The other `data/synthetic/` subtrees — `logs/`, `inputs/`, `detection/`, `mitigation/`, `reeval/` — are **not test data**: they are a synthetic **dry-run of the real-data pipeline**, materialised only to pin down and validate the application structure (the source→stage layout, ingest/build/score/retrain wiring) **before** any real Allianz resource is connected. They exist so the app skeleton is finalised against synthetic stand-ins first; once real data arrives it flows through the identical `data/real/{logs,inputs,detection,mitigation,reeval}/` tree. Treat them as scaffolding for the real-data integration, never as a dataset the synthetic tests consume.
 
 > **Note — log ingestion is the one name-translation point (added 2026-07-06).** Each model application emits its production log under whatever name IT chose (`log_v2.parquet` here; on real data e.g. `v2_prod_scored_2025Q1.parquet`). This pipeline expects one canonical per-version name, `logs/<v>.parquet`. `scoring/ingest.py` is the SINGLE place that translates "their name → our name": it reads the source path from `data/<source>/logs/manifest.json`, validates the required schema (`claim_id`, `observed_outcome`, `true_garage_outcome`, `model_<v>_decision`), and archives a copy as `logs/<v>.parquet`. Everything downstream (`build_inputs.py`) reads only the canonical `logs/`, so when a file name changes you edit `manifest.json` alone — no pipeline code changes.
 
