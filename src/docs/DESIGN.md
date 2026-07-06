@@ -1,6 +1,6 @@
 # Design Pattern
 
-> **Implementation status (2026-07-03, reorg complete).** This document describes the **target** design; the current synthetic chain already runs it end-to-end. Exists and working today: `config.py`, the design docs, `scoring/{predict,retrain}.py` + `run_all.sh`, the per-version envs at `src/envs/{v1,v2,v3}/`, the current Analysis-Layer impl (`detector/residual_peak.py`, `mitigator/ips.py`, `run_cycle.py`, `data/build_scoring_inputs.py`, `data/scores.py`), and the source→stage data tree `data/synthetic/{inputs,detection,mitigation,reeval}/` with all pkls under `src/models/synthetic/{baseline,mitigated}/`. Still design-only (target names): `pipeline/`, the `sfp_detector.py`/`sfp_mitigator.py` strategy split, `preprocessing/`, `training/`, `data/loaders/`, and the whole `data/real/`+`models/real/` side. See `STRUCTURE.md` for the authoritative status and the 2026-07-03 reorg. The two layers named there map onto this doc as: **Version Layer** = the per-version scoring/(re)train envs; **Analysis Layer** = the pipeline/detector/mitigator that loads no model.
+> **Implementation status (2026-07-04, Analysis-Layer OO built).** This document describes the **target** design; the current synthetic chain runs it end-to-end. Exists and working today: `config.py`, the design docs (under `src/docs/`), `scoring/{predict,retrain}.py` + `score_all.sh` + `build_inputs.py` + `load_scores.py`, the per-version envs at `src/envs/{v1,v2,v3}/`, the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC) — and the source→stage data tree `data/synthetic/{inputs,detection,mitigation,reeval}/` with all pkls under `src/models/synthetic/{baseline,mitigated}/`. Still design-only: `preprocessing/`, `training/`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/`+`models/real/` side. See `STRUCTURE.md` for the authoritative status. The two layers named there map onto this doc as: **Version Layer** = the per-version scoring/(re)train envs; **Analysis Layer** = the pipeline/detector/mitigator that loads no model.
 
 ## Strategy Pattern
 
@@ -95,7 +95,7 @@ Because the two stages never share a process, there is no parent/child coordinat
 
 [ Analysis stage — single env, no models loaded ]
 
-  src/data/scores.py  →  merge on claim_id  →  SFPDetector
+  src/scoring/load_scores.py  →  merge on claim_id  →  SFPDetector
        claim_id | model_v1_score | model_v2_score | model_v3_score
 ```
 
@@ -192,7 +192,7 @@ Both concerns ultimately **execute the version's own repo code** — our `src/` 
 
 > **Rule of thumb:** the *actual* preprocessing and training logic lives in the per-version repos; `src/` provides **uniform adapters** (`preprocessing/v{1,2,3}.py`, `retrain.py`) so the Analysis Layer sees one contract regardless of version. Both adapters **execute in the Version Layer** (the version's own env), because both feed / build the model.
 
-**`src/scoring/run_all.sh`** — orchestrates all versions, each in its **own** uv env, so each scoring run is a separate process (import conflicts are structurally impossible). v1, v2 and v3 each have their own environment. Below uses the **stricter** per-version layout (`uv run --project`); with the standard layout call each env's interpreter directly (`src/envs/v1/.venv/bin/python …`). See `ENV_MANAGEMENT.md` for both. `SOURCE` selects the data source (`synthetic` or `real`) — the whole tree mirrors under `data/<source>/` + `models/<source>/`.
+**`src/scoring/score_all.sh`** — orchestrates all versions, each in its **own** uv env, so each scoring run is a separate process (import conflicts are structurally impossible). v1, v2 and v3 each have their own environment. Below uses the **stricter** per-version layout (`uv run --project`); with the standard layout call each env's interpreter directly (`src/envs/v1/.venv/bin/python …`). See `ENV_MANAGEMENT.md` for both. `SOURCE` selects the data source (`synthetic` or `real`) — the whole tree mirrors under `data/<source>/` + `models/<source>/`.
 
 ```bash
 #!/usr/bin/env bash
@@ -221,12 +221,12 @@ uv run --project "$ENVDIR/v3" python src/scoring/predict.py \
 echo "All versions scored → $OUTDIR"
 ```
 
-> Each `--features` path points to that version's own feature file. On synthetic data those files are identical (produced by `export_version_features`); on real data each is built by its version's own preprocessing.
+> Each `--features` path points to that version's own feature file, built by that version's own repo preprocessing — on **both** synthetic and real (2026-07-03 decision: synthetic runs the same external-repo path, it is only a temporary stand-in).
 
-**`src/data/scores.py`** — the analysis-side loader. Reads the precomputed files and merges on `claim_id`. No model dependency, no environment awareness.
+**`src/scoring/load_scores.py`** — the analysis-side loader. Reads the precomputed files and merges on `claim_id`. No model dependency, no environment awareness.
 
 ```python
-# src/data/scores.py
+# src/scoring/load_scores.py
 import pandas as pd
 from functools import reduce
 
@@ -258,10 +258,10 @@ Each version retains an independent spec even when dependencies currently coinci
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env (`uv sync` in that dir, or `uv venv` + `uv pip install -r`).
 2. Produce `data/<source>/inputs/features_v4.parquet` (v4's own preprocessing on real data; on synthetic, `export_version_features` already emits it once the version is registered), and regenerate `models/<source>/baseline/v4.pkl` by retraining v4's repo code in `env-v4`.
-3. Add one scoring line for v4 to `run_all.sh` (`uv run --project src/envs/v4 python src/scoring/predict.py … --features data/<source>/inputs/features_v4.parquet --version v4 --out data/<source>/detection/v4_scores.parquet`).
+3. Add one scoring line for v4 to `score_all.sh` (`uv run --project src/envs/v4 python src/scoring/predict.py … --features data/<source>/inputs/features_v4.parquet --version v4 --out data/<source>/detection/v4_scores.parquet`).
 4. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis.
 
-No new class. `predict.py` and `scores.py` are unchanged — they are version-agnostic.
+No new class. `predict.py` and `load_scores.py` are unchanged — they are version-agnostic.
 
 ### Trade-offs
 

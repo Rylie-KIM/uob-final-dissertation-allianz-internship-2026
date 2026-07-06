@@ -128,7 +128,7 @@ uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/sy
     --out src/data/synthetic/detection/v2_scores.parquet
 ```
 
-`src/scoring/run_all.sh` wraps all three versions. The script is **version-agnostic** — the active env plus the CLI args decide which version is scored. See `DESIGN.md` for the full design and the superseded runtime-subprocess alternative.
+`src/scoring/score_all.sh` wraps all three versions. The script is **version-agnostic** — the active env plus the CLI args decide which version is scored. See `DESIGN.md` for the full design and the superseded runtime-subprocess alternative.
 
 **Re-training and preprocessing also run in the per-version env.** `src/scoring/retrain.py` (re-evaluation) and `src/scoring/preprocess.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py`. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. Note the *training protocol* (`src/training/`) is shared across versions and env-agnostic (pure pandas/sklearn + an injected estimator), whereas *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
 
@@ -154,7 +154,7 @@ Commit `pyproject.toml` + `uv.lock` (analysis), and each version's spec files, s
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env.
 2. Produce `data/<source>/inputs/features_v4.parquet` (v4's own preprocessing on real data; on synthetic, `export_version_features` emits it once the version is registered), and regenerate `src/models/<source>/baseline/v4.pkl` by retraining v4's repo code in `env-v4`.
-3. Add one scoring line for v4 to `src/scoring/run_all.sh`.
+3. Add one scoring line for v4 to `src/scoring/score_all.sh`.
 4. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis.
 
-No new class is required — `predict.py` and `scores.py` are version-agnostic. See `DESIGN.md`.
+No new class is required — `predict.py` and `load_scores.py` are version-agnostic. See `DESIGN.md`.
