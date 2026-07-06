@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
+from sklearn.metrics import precision_recall_curve
+from sklearn.model_selection import train_test_split
 
 from generate.config import (
     SCRAP_THRESHOLD,
@@ -8,11 +10,16 @@ from generate.config import (
     MATURATION_BUFFER_MONTHS,
     OOT_MONTHS,
     MIN_TRAIN_ROWS,
+    TARGET_PRECISION,
+    VALIDATION_FRAC,
     ModelSpec,
     FEATURE_COLS,
     CATEGORICAL_COLS,
 )
 from generate.imputer import EnrichmentImputer
+from generate.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def _encode_categoricals(df: pd.DataFrame) -> pd.DataFrame:
@@ -26,8 +33,34 @@ def _get_feature_matrix(df_encoded: pd.DataFrame, base_cols: list[str]) -> pd.Da
     return df_encoded[available].astype(float)
 
 
-def _apply_threshold(scores: pd.Series) -> pd.Series:
-    return (scores >= SCRAP_THRESHOLD).astype(int)
+def _apply_threshold(scores: pd.Series, tau: float) -> pd.Series:
+    return (scores >= tau).astype(int)
+
+
+def _tune_threshold(
+    y_val: np.ndarray,
+    scores_val: np.ndarray,
+    target: float = TARGET_PRECISION,
+    fallback: float = SCRAP_THRESHOLD,
+) -> float:
+    """
+    τ_v = the lowest (most permissive) score cutoff whose precision on the held-out
+    validation slice first reaches `target`, scored against that version's
+    (SFP-contaminated) training label. Falls back to SCRAP_THRESHOLD (0.872) when the
+    target is unreachable.
+
+    precision_recall_curve returns thresholds in increasing order with precision[i]
+    aligned to threshold[i]; the first index clearing `target` is therefore the lowest
+    threshold that still holds the precision constraint. This is the identical rule to
+    evaluate.find_precision_threshold — the single source of truth for the scrap policy.
+    """
+    if len(np.unique(y_val)) < 2:
+        return fallback
+    prec, _rec, thresholds = precision_recall_curve(y_val, scores_val)
+    for p, t in zip(prec, thresholds):
+        if p >= target:
+            return float(t)
+    return fallback
 
 
 def _train_cutoff(end_year: int) -> pd.Timestamp:
@@ -104,15 +137,37 @@ def train_and_apply(
         df_enc = _encode_categoricals(df)
         X_all  = _get_feature_matrix(df_enc, list(df.columns))
 
+    # Hold out a validation slice from the training window to tune τ_v out-of-sample.
+    # The model is fit on the remaining rows and reused as-is for final scoring, so the
+    # tuned threshold stays calibrated to the exact model that produces the scores.
+    X_train = X_all.loc[train_mask]
+    y_train = y_train.reindex(X_train.index)
+    strat   = y_train if y_train.nunique() > 1 else None
+    X_fit, X_val, y_fit, y_val = train_test_split(
+        X_train, y_train,
+        test_size=VALIDATION_FRAC,
+        random_state=SEED,
+        stratify=strat,
+    )
+
     model = XGBClassifier(n_estimators=100, random_state=SEED, eval_metric="logloss")
-    model.fit(X_all.loc[train_mask], y_train)
+    model.fit(X_fit, y_fit)
+
+    # τ_v: lowest cutoff holding precision >= TARGET_PRECISION on the validation slice
+    # (scored against the contaminated training label); 0.872 fallback if unreachable.
+    val_scores = model.predict_proba(X_val)[:, 1]
+    tau_v      = _tune_threshold(y_val.to_numpy(), val_scores)
+    log.info(
+        f"[{spec.tag}] tuned tau_v = {tau_v:.4f} "
+        f"(target precision {TARGET_PRECISION}, fallback {SCRAP_THRESHOLD})"
+    )
 
     score_col    = f"model_{spec.tag}_score"
     decision_col = f"model_{spec.tag}_decision"
     outcome_col  = f"model_{spec.tag}_observed_outcome"
 
     df[score_col]    = model.predict_proba(X_all)[:, 1].round(4)
-    df[decision_col] = _apply_threshold(df[score_col])
+    df[decision_col] = _apply_threshold(df[score_col], tau_v)
 
     scrap_mask  = df[decision_col] == 1
     garage_mask = df[decision_col] == 0

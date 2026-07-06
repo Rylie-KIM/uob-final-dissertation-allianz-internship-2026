@@ -32,6 +32,10 @@ V3_TRAIN_END_YEAR   = SYNTH_END_YEAR
 MATURATION_BUFFER_MONTHS = 2   # exclude most recent N months
 OOT_MONTHS               = 6   # hold out N months
 
+# Fraction of the training window held out as the validation slice used to tune
+# each version's decision threshold τ_v (precision >= TARGET_PRECISION).
+VALIDATION_FRAC = 0.2
+
 # min dataset size for XGBoost model (chosen based on paper s1)
 MIN_TRAIN_ROWS = 10_000
 
