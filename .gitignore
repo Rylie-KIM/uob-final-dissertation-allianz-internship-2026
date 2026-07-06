@@ -6,3 +6,5 @@ __pycache__/
 
 # Version model repos from external apps. 
 /model_repos/
+/data/real/
+/models/real/ 
