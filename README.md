@@ -23,10 +23,23 @@ Before any ML model was deployed, whether a car was scrapped (written off as tot
 
 | Pre-ML figure | Value | What it means for SFP |
 |---|---|---|
-| **% of all cars scrapped** | **15%** | The human-era baseline scrap rate — the reference point the ML-era rate (~18–19% under v2a/v3a) should be compared against. Scrap inflation above 15% is the headline symptom. |
+| **% of all cars scrapped** | **15%** | The human-era baseline scrap rate — the reference point the real ML-era rate (≈ 19% → 21.5% post-deployment) should be compared against. Scrap inflation above 15% is the headline symptom. (**Real Allianz pre-model figures**; the synthetic DGP reproduces the loop with its own analogue rates ~18.4% → 18.6% — see the model-versions table further down.) |
 | **% of scrapped cars fast-tracked for TL** (handler-identified, **did *not* go to the garage**) | **43%** | Nearly half of all write-offs were **forced labels with no garage verification** — a handler decided total loss and the car was never independently assessed. This is the **pre-ML human-based SFP loop quantified**: 43% of the positive labels in the pre-ML era are structurally unverifiable (`pre_ml_label` contamination). The remaining ~57% of scrapped cars did reach a garage and carry an engineer (ground-truth) outcome. |
 
 **Why this matters.** v1 was trained on `pre_ml_label`, in which ~43% of the total-loss labels are handler-forced and never garage-checked (see §"Why there is no ground truth"). This figure is the concrete size of the contamination v1 inherited *before* the model-based loop ever began — the human loop the ML loop then amplified. (Source figures provided by the Allianz team; to be reconciled with the real logs when available.)
+
+### Implied true total-loss rate — the class prior α
+
+The 15% / 43% split pins down the **true total-loss rate (class prior α = P(y=1))** as a **sharp bound: α ∈ [8.55%, 15%], point estimate ≈ 15%.** In the pre-ML era, of *all* cars:
+
+- **93.55% reached a garage and carry a ground-truth outcome** — 85% engineer-confirmed repairable (non-TL) + 8.55% engineer-confirmed total loss.
+- **only 6.45% were fast-tracked** (handler-forced, no garage visit) — the oracle is permanently destroyed for these; their true status is unverifiable.
+
+α is therefore partially identified by the 6.45% unverified slice alone: **8.55%** if every forced label was actually repairable, up to **15%** if every forced label was a genuine total loss. This is a **sharp** bound (not merely conservative) because the entire 85% non-scrapped region is garage-observed, so the missed-total-loss error in it is structurally **zero** — all uncertainty is confined to the 6.45% fast-track slice. The **point estimate sits near the upper bound (≈ 15%)**: fast-tracking was rule-driven on unambiguous write-offs (e.g. a flipped car), so those forced labels are almost all genuine total losses.
+
+**This is the calibration anchor for the whole SFP story.** The pre-ML scrap *decision* rate (15%) almost exactly matches α — evidence the human era was well-calibrated *before* any model contamination entered the labels. The SFP fingerprint is the **post-deployment scrap rate inflating above α** (≈ 19% → 21.5%): once the model starts fast-tracking on its own forced-positive labels, it scraps more cars than the true total-loss rate can justify.
+
+(α here is the *marginal* class prior P(y=1); it is distinct from the scrap precision π_scrap = P(y=1 | scrap), the positive rate *within* the scrapped subgroup. See `literatures/notes/p28.md`.)
 
 ## Summary of 2 expected benefits from the ML model 
 1. reduce the process, cost, and time for total loss cars 
@@ -186,7 +199,14 @@ df["model_v1_observed_outcome"] = np.where(
 )
 ```
 
-> **Data retention note:** The `pre_ml_label` dataset (human-era handler decisions, 2016–2021) used to train v1 is no longer available at Insurance Company.. It has been disposed of due to data protection and regulatory requirements. This means v1's training data cannot be reconstructed or audited retrospectively — a constraint that informs why the SFP loop is difficult to untangle without the original pre-ML labels.
+> **⚠️ Hard constraint — v1's training data is gone and cannot be accessed.** The `pre_ml_label` dataset (human-era handler/engineer decisions, 2016–2021) that v1 was trained on has been **permanently disposed of under Insurance Company.'s data-protection and regulatory (retention-policy) obligations**. It is **not archived, not recoverable, and the research has no access to it** — v1's training data can never be reconstructed, re-scored, or audited retrospectively, and the true pre-ML class prior (α, above) can only be *bounded*, never measured directly.
+>
+> **This is a first-class experiment-design constraint, not a footnote.** Every method in this project must be designed to work *without* v1's original training data or the pre-ML labels:
+> - No approach may assume access to `pre_ml_label` or a clean pre-ML holdout — the counterfactual v2b (which mixes in `pre_ml_label`) is therefore a **synthetic-only** device and can never be reproduced on real Allianz data.
+> - v1 can only be studied through the **artefacts it left behind** (its production log: `model_v1_score`, `model_v1_decision`, `model_v1_observed_outcome`), never through its inputs.
+> - Any debiasing / unbiased-evaluation / causal-mitigation design that would require the original training labels to validate against is **infeasible on real data** and must instead rely on the v1 log, garage-verified rows, and bounding arguments.
+>
+> This irreversibility is a core reason the SFP loop is hard to untangle: the one dataset that could anchor the chain to an uncontaminated ground truth no longer exists.
 
 ### Model v2 — currently deployed; trained exclusively on v1-generated data
 

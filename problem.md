@@ -21,10 +21,12 @@ Before any ML model existed, scrapping (write-off as total loss) was decided by 
 
 | Pre-ML figure | Value | Relevance to §2 |
 |---|---|---|
-| **% of all cars scrapped** | **15%** | Human-era baseline scrap rate — the reference against which ML-era inflation (v2a/v3a ~18–19%, §1.5 table) is judged. Scrap-rate inflation above 15% is the headline (but confounded, §2.5 #2/#6/#10) symptom. |
+| **% of all cars scrapped** | **15%** | Human-era baseline scrap rate — the reference against which real ML-era inflation (≈ 19% → 21.5% post-deployment) is judged. Scrap-rate inflation above 15% is the headline (but confounded, §2.5 #2/#6/#10) symptom. (**Real Allianz pre-model figures**; the synthetic DGP's analogue is ~18.4% → 18.6%, §1.5 table.) |
 | **% of scrapped cars fast-tracked for TL** (handler-identified, **no garage visit**) | **43%** | ~43% of pre-ML write-offs are **forced, garage-unverified labels** — the pre-ML human-based SFP loop (§2.2, §1.5 "Model v1") **quantified**. These land in `pre_ml_label` as contaminated positives; the remaining ~57% of scrapped cars reached a garage and carry an engineer (ground-truth) outcome. |
 
 This is the concrete size of the contamination `pre_ml_label` carried *before* the model-based loop began — the human loop v1 was trained on and the model loop then amplified (§2.3). Source: Allianz team figures; to be reconciled with the real logs when available. Mirrors `README.md` §"Pre-ML Baseline".
+
+**Implied class prior α = P(y=1) — sharp bound [8.55%, 15%], point estimate ≈ 15%.** Decomposing all pre-ML cars: **93.55% are garage-observed ground truth** (85% confirmed non-TL + 8.55% confirmed TL) and **only 6.45% are fast-tracked** (oracle destroyed, unverifiable). α is partially identified by that 6.45% slice alone: 8.55% (all forced labels actually repairable) → 15% (all genuine TL). The bound is **sharp**, not merely conservative — the 85% non-scrapped region is fully garage-observed so its missed-TL error is structurally **0**; all uncertainty is confined to the 6.45% fast-track slice. Point estimate ≈ upper bound because fast-tracking is rule-based on obvious write-offs (e.g. flipped car). **Calibration check:** the pre-ML scrap rate (15%) ≈ α → the human era was well-calibrated *before* contamination; the SFP fingerprint is the post-deployment scrap rate inflating *above* α (≈ 19% → 21.5%, cf. §1.5). This is the *marginal* class prior α, distinct from scrap precision π_scrap = P(y=1 | scrap) (see `literatures/notes/p28.md`).
 
 ### 1.2 Expected Benefits (2)
 
@@ -110,6 +112,10 @@ df["model_v1_observed_outcome"] = np.where(
     df["model_v1_decision"] == 1, 1, garage_outcome              # 1 if scrapped, else true outcome
 )
 ```
+
+> **⚠️ Hard constraint — v1's training data is gone and cannot be accessed.** The `pre_ml_label` dataset (human-era handler/engineer decisions, 2016–2021) v1 was trained on has been **permanently disposed of under Insurance Company.'s data-protection and regulatory (retention-policy) obligations** — it is **not archived, not recoverable, and the research has no access to it**. v1's training data can never be reconstructed, re-scored, or audited retrospectively, and the true pre-ML class prior (α, §1.1a) can only be *bounded*, never measured directly.
+>
+> **This is a first-class experiment-design constraint.** Every method (Builds 02–06) must be designed to run *without* v1's original training data or the pre-ML labels: (a) no method may assume access to `pre_ml_label` or a clean pre-ML holdout — the counterfactual v2b that mixes `pre_ml_label` back in is therefore **synthetic-only** and never reproducible on real data; (b) v1 is observable only through the **artefacts it left behind** (its log: `model_v1_score`/`_decision`/`_observed_outcome`), never through its inputs; (c) any unbiased-evaluation / causal-mitigation design requiring the original training labels to validate against is **infeasible on real data** and must instead rely on the v1 log, garage-verified rows, and bounding arguments. This irreversibility is a core reason the loop is hard to untangle — the one dataset that could anchor the chain to uncontaminated ground truth no longer exists. Mirrors `README.md` § "Model v1".
 
 #### Model v2 — currently deployed; trained exclusively on v1-generated data
 
