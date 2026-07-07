@@ -117,7 +117,7 @@ The SFP loop structure differs fundamentally between the two domains — methods
 | **Pre-ML baseline & class prior α — NEW 2026-07-07 (README §Pre-ML Baseline / problem.md §1.1a)** | Pre-ML human era: **15% of all cars scrapped**, of which **43% were handler fast-tracked with no garage visit** (forced, unverifiable labels in `pre_ml_label`). This pins the **true total-loss rate (class prior α = P(y=1)) to a sharp bound α ∈ [8.55%, 15%], point estimate ≈ 15%** — sharp because the 93.55% garage-observed region has structurally zero missed-TL error; all uncertainty is in the 6.45% fast-track slice. **Calibration anchor:** pre-ML scrap rate (15%) ≈ α ⇒ the human era was well-calibrated *before* contamination; the SFP fingerprint is the post-deployment scrap rate inflating *above* α (real ≈ 19% → 21.5%; synthetic analogue ~12.5% → 18.4% → 18.6% across v1→v2a→v3a). α is the *marginal* prior, distinct from scrap precision π_scrap = P(y=1 \| scrap). |
 | **Two nested SFP loops — NEW, supervisor decision 2026-07-06** | The FTTL problem is **two nested loops**: (1) a **human-based loop** embedded in `pre_ml_label` — call handlers write cars off without a garage inspection, producing forced labels — and (2) the **model-based forced-label loop** (§ P15/P27) that v1 inherited and each version amplifies. **Only the garage engineer's physical assessment is ground truth; the call handler is treated *unconditionally* as a biased data generator, never as a weaker oracle** (lacks the engineering knowledge to judge repair feasibility). v1's purpose was to *outperform* the handler, yet it was trained on handler-generated labels. |
 | **Positivity / SCAR violation — NEW (problem.md §2.6, P28)** | The scrapping decision `D = 𝟙[f(X) ≥ τ_v]` is a **deterministic step function of X**, so the labelling propensity `e(x) = Pr(D=1 \| X, Y=1) ∈ {0,1}` — **SCAR is violated by construction** and **positivity/overlap fails** wherever `e(x)=1` (high-score cars are always scrapped → no garage counterfactual). Consequences: SCAR-based PU prior estimators are invalid; IPS weights are degenerate exactly at the threshold, so Build 03/06 use the (uncalibrated) model score as a *soft* propensity — a documented limitation. The saving grace vs. generic SAR is that the mechanism is *known* (the model + τ_v), so `e(x)` is computable rather than estimated. |
-| **Per-version threshold τ_v — NEW (README/problem.md §1.4)** | The scrap policy is an **absolute score cutoff, not a percentile**; the cutoff *value* `τ_v` is **tuned per version** to hold precision ≥ 0.985 on validation (against the contaminated label). **`0.872` is specifically v2's value**; v1/v3 differ (synthetic tuned values v1 ≈ 0.852, v2a ≈ 0.906). "The threshold" = "the precision-≥-0.985 cutoff for that version". This is why score drift shows up as scrap-rate inflation (a percentile rule would hide it) and why the 0.872 cutoff is a *sharp RDD*. |
+| **Per-version threshold τ_v — NEW (README/problem.md §1.4)** | The scrap policy is an **absolute score cutoff, not a percentile**, but the cutoff is **not a fixed constant of the pipeline** — it is the *output* of a **mandatory per-version threshold-tuning step**: for each new model version the team sweeps the score cutoff and picks the smallest `τ_v` that still holds **precision ≥ 0.985** on validation (against the contaminated label). Precision ≥ 0.985 is the *binding constraint*; `τ_v` is whatever value delivers it for that version's score distribution. **`0.872` is specifically the value this tuning produced for v2** — it is not portable to v1/v3, which have their own tuned cutoffs (synthetic tuned values v1 ≈ 0.852, v2a ≈ 0.906). So "the threshold" always means "the precision-≥-0.985 cutoff **tuned for that version**", and a bare "0.872" is shorthand for "v2's tuned cutoff", never a universal number. This is why score drift shows up as scrap-rate inflation (a percentile rule would hide it), why the SFP fingerprint is visible even though precision is *held fixed by construction* (the constraint is satisfied by re-tuning τ_v each version, masking drift in the metric), and why v2's cutoff is a *sharp RDD*. |
 | **New papers P29–P35** | P29–P33 added 2026-06-23 (mathematical SFP-evaluation gap); P34–P35 added 2026-07-07 (model-class-agnostic amplification — the non-convexity defence for XGBoost). **Numbering corrected 2026-07-07: P29 = Veprikov (dynamical systems), P31 = Mendler-Dünner (convergence)** — previously swapped in this file and in `literatures/compare.md`. |
 | **Priority changes** | P27 (Selective Labels — NEW, KDD'17) enters **#3**; P6 (Heckman) rises to **#4**; P28 (PU Learning survey — NEW) enters **#8**; P11 (Lum & Isaac) drops to **#6**; P21, P7, P5 drop out of top 10 |
 | **Business cost structure (README)** | False positive = scrapping a repairable car → insurer pays **full car value** (vs. lower repair cost). SFP loop deepening → systematic false positive increase → direct financial loss. Company prefers repairable claims. v2 underperformed → SFP suspected → project parked (also superseded by the Control Expert acquisition, integration expected early 2027). This reframes SFP as a **cost containment failure**, not just a technical bias problem. |
@@ -229,7 +229,7 @@ $$\hat{\mu}_{IPW} = \frac{1}{n} \sum_{i=1}^{n} \frac{W_i \cdot Y_i}{\hat{e}(X_i)
 where $\hat{e}(X_i) = P(W_i = 1 \mid X_i)$ is the propensity score — here the estimated probability of being **sent to the garage** (i.e. *not* scrapped). Upweights garage observations that were unlikely to be observed (high-score, near-threshold cars); downweights routinely-garaged low-score cars.
 
 **How to apply at Insurance Company.**
-Build 06 re-weights each garage-observed car by the inverse of its propensity to be sent to the garage. Cars with high model scores that were nonetheless sent to garage (rare, just below the 0.872 cutoff) get high weights; low-score cars (routinely garaged) get weight ≈ 1. This re-balances the garage-only observed set back toward the full claims distribution, then trains a bias-corrected total-loss model. **Caveat:** under a hard threshold the propensity is degenerate (0/1) exactly at the boundary, so the practical workaround treats the uncalibrated model score itself as a soft propensity — see `problem.md` §2.6.
+Build 06 re-weights each garage-observed car by the inverse of its propensity to be sent to the garage. Cars with high model scores that were nonetheless sent to garage (rare, just below v2's precision-tuned cutoff τ_v = 0.872) get high weights; low-score cars (routinely garaged) get weight ≈ 1. This re-balances the garage-only observed set back toward the full claims distribution, then trains a bias-corrected total-loss model. **Caveat:** under a hard threshold the propensity is degenerate (0/1) exactly at the boundary, so the practical workaround treats the uncalibrated model score itself as a soft propensity — see `problem.md` §2.6.
 
 **What to write in the dissertation**
 Cite as the theoretical foundation of IPW debiasing. State that Build 06 implements a DoWhy-based IPW estimator whose statistical properties trace to this paper.
@@ -1042,7 +1042,7 @@ Stateful performative map: D(θ, s_t), with state transition s_{t+1} = g(s_t, θ
 Convergence to equilibrium (θ*, s*) requires: sensitivity ε_θ (distribution shift per parameter change) and sensitivity ε_s (state shift per state change) jointly satisfy a contraction condition. When ε_s is large — i.e. the state itself is highly reactive to past model decisions — standard repeated retraining cannot escape the biased fixed point even if the model's per-step update is small.
 
 **How to apply at Insurance Company.**
-The state s_t is the accumulated label-contamination profile across vehicle segments: how many forced-positive labels have been added per segment across all prior model versions. After v1 and v2a both ran with the absolute 0.872 threshold, s is heavily contaminated in high-RTV / high-damage segments. Build 01 should simulate the stateful dynamics explicitly — not just the one-step v1→v2 transition, but the multi-step v1→v2→v3 trajectory — to show that even a well-specified v3 cannot escape the biased equilibrium once the state accumulation has reached a threshold. The state-dependent framework also explains why v2b (counterfactual with pre-ML data) partially resists SFP: including pre-ML labels in training effectively resets part of the contaminated state.
+The state s_t is the accumulated label-contamination profile across vehicle segments: how many forced-positive labels have been added per segment across all prior model versions. After v1 and v2a both ran under precision-≥-0.985-tuned absolute cutoffs (each version's own τ_v; 0.872 is v2's), s is heavily contaminated in high-RTV / high-damage segments. Build 01 should simulate the stateful dynamics explicitly — not just the one-step v1→v2 transition, but the multi-step v1→v2→v3 trajectory — to show that even a well-specified v3 cannot escape the biased equilibrium once the state accumulation has reached a threshold. The state-dependent framework also explains why v2b (counterfactual with pre-ML data) partially resists SFP: including pre-ML labels in training effectively resets part of the contaminated state.
 
 **What to write in the dissertation**
 Cite alongside P15 in the theory section. State: "Perdomo et al. (2020) characterise the loop in terms of the current model alone. Brown et al. (2022) generalise this to a stateful setting where s_{t+1} = g(s_t, θ_t): the distribution depends on both the model and the accumulated history of prior scrapping decisions. This is the correct model for the Insurance Company. pipeline, where v1's forced-positive labels became part of the training state for v2a, and v2a's labels in turn become the state for v3. The failure of v3 retraining is consistent with Brown et al.'s result that a large state sensitivity ε_s can prevent convergence to the performatively optimal classifier."
@@ -1206,50 +1206,6 @@ Cite in the problem-framing and related-work sections as the applied precedent. 
 **Numbering corrected 2026-07-07:** P29 = Veprikov (dynamical systems), P31 = Mendler-Dünner (convergence) — earlier drafts of this file and `literatures/compare.md` had these two swapped relative to the canonical numbering in `problem.md`, `literatures/notes/p29.md`, and the notebooks.
 
 ---
-
-## PDF Download Status
-
-18 of 35 papers downloaded automatically to `literatures/p{N}.pdf`.
-The remaining 17 are behind institutional paywalls, are paid books, or are newer additions (P29–P35) not yet fetched — download via your **University of Bristol library** login or **Insurance Company. VPN**.
-
-| # | File | Status | Note |
-|---|------|--------|------|
-| P1 | `p1.pdf` ✓ | Downloaded | Statistical Science (Project Euclid open archive) |
-| P2 | — | **UoB library needed** | APA paywall · DOI: 10.1037/h0037350 |
-| P3 | — | **UoB library needed** | JASA 1952 · DOI: 10.1080/01621459.1952.10483446 |
-| P4 | — | **UoB library needed** | Biometrika/Oxford paywall · DOI: 10.1093/biomet/70.1.41 |
-| P5 | `p5.pdf` ✓ | Downloaded | Pearl's UCLA preprint server |
-| P6 | — | **UoB library needed** | Econometrica paywall · DOI: 10.2307/1912352 |
-| P7 | `p7.pdf` ✓ | Downloaded | NBER working paper version (WP 14251) |
-| P8 | — | **Purchase / library** | Princeton UP book · ISBN: 9780691120355 |
-| P9 | `p9.pdf` ✓ | Downloaded | arXiv:1009.6119 |
-| P10 | — | **UoB library needed** | California Law Review · DOI: 10.15779/Z38BG31 |
-| P11 | — | **UoB library needed** | Significance/Wiley paywall · DOI: 10.1111/j.1740-9713.2016.00960.x |
-| P12 | `p12.pdf` ✓ | Downloaded | arXiv:1706.09847 |
-| P13 | `p13.pdf` ✓ | Downloaded | arXiv:1701.08230 |
-| P14 | `p14.pdf` ✓ | Downloaded | arXiv:1803.04383 |
-| P15 | `p15.pdf` ✓ | Downloaded | arXiv:2002.06673 |
-| P16 | `p16.pdf` ✓ | Downloaded | arXiv:1608.00060 |
-| P17 | `p17.pdf` ✓ | Downloaded | NeurIPS 2015 proceedings |
-| P18 | `p18.pdf` ✓ | Downloaded | arXiv:2011.03395 |
-| P19 | — | **UoB library needed** | Biometrika 1933 · DOI: 10.1093/biomet/25.3-4.285 |
-| P20 | `p20.pdf` ✓ | Downloaded | Author's (Cesa-Bianchi) personal page |
-| P21 | `p21.pdf` ✓ | Downloaded | arXiv:1707.02038 |
-| P22 | `p22.pdf` ✓ | Downloaded | arXiv:1610.02413 |
-| P23 | `p23.pdf` ✓ | Downloaded | fairmlbook.org (open access book) |
-| P24 | `p24.pdf` ✓ | Downloaded | arXiv:1808.00023 |
-| P25 | `p25.pdf` ✓ | Downloaded | eur-lex.europa.eu (full 144-page regulation) |
-| P26 | `p26.pdf` ✓ | Downloaded | tor-lattimore.com (open access book, 597pp) |
-| P27 | — | **ACM DL / UoB library** | KDD 2017 · ACM DL: dl.acm.org/doi/10.1145/3097983.3098066 (no arXiv preprint) |
-| P28 | — | **arXiv free / UoB library** | arXiv:1811.04820 (free preprint); Springer DOI: 10.1007/s10994-020-05877-5 |
-| P29 | — | **arXiv free / UoB library** | Veprikov et al. · arXiv:2405.02726 (free preprint); Springer KAIS DOI: 10.1007/s10115-025-02560-w |
-| P30 | — | **arXiv free** | arXiv:2305.06055 |
-| P31 | — | **arXiv free** | Mendler-Dünner et al. · arXiv:2002.09058 · NeurIPS 2020 proceedings also open access |
-| P32 | — | **arXiv free / ACM DL** | arXiv:1902.10730 (free preprint); ACM DL: dl.acm.org/doi/10.1145/3306618.3314288 |
-| P33 | — | **arXiv free** | arXiv:2011.03885 · AISTATS 2022 proceedings also open access (PMLR 151) |
-| P34 | — | **arXiv free / PMLR** | arXiv:2209.03942 · ICML 2023 proceedings (PMLR 202) open access |
-| P35 | — | **PMLR / UoB library** | CHIL 2022 (PMLR); related MLHC'20 arXiv:1909.03095 — confirm exact CHIL entry |
-
 **Quick access for paywalled papers via UoB library:**
 1. Go to https://www.bristol.ac.uk/library/
 2. Search by DOI or title in the "Find a resource" search bar
@@ -1265,7 +1221,7 @@ The remaining 17 are behind institutional paywalls, are paid books, or are newer
 application — what each component must compute and **which paper licenses each choice** —
 for the **total loss prediction** domain (not the original fraud framing). It is written
 against the real dataset (`src/data/synthetic/`) and the real policy
-(absolute scrap cutoff `score ≥ 0.872`, two-generation training v1 → v2a/v2b). The
+(absolute scrap cutoff `score ≥ τ_v`, where `τ_v` is **tuned per version to hold precision ≥ 0.985** — 0.872 is v2's tuned value; two-generation training v1 → v2a/v2b). The
 companion section "Application Implementation" below maps this onto the `src/` code.*
 
 ## 0. The one structural fact everything else follows from
@@ -1274,8 +1230,10 @@ The total loss pipeline is a **selective-labels system with irreversible, over-l
 actions**:
 
 ```
-score ≥ 0.872  → scrap     → observed_outcome forced to 1   (car gone; garage NEVER verifies → oracle permanently absent)
-score <  0.872 → garage    → observed_outcome = true result  (reliable 0/1)
+score ≥ τ_v  → scrap     → observed_outcome forced to 1   (car gone; garage NEVER verifies → oracle permanently absent)
+score <  τ_v → garage    → observed_outcome = true result  (reliable 0/1)
+
+τ_v = per-version cutoff, tuned to hold precision ≥ 0.985 on validation; τ_v(v2) = 0.872
 ```
 
 Two consequences drive the entire application:
@@ -1300,7 +1258,7 @@ mechanism (01), **estimate** clean effects despite the bias (02, 04), or **break
 | **01 Simulation** | Re-run the v1→v2 loop on synthetic data; show scrap rate inflates (19%→21.5%) while true feasibility is fixed | P12 (Pólya urn), P15 (performative risk), P14 (long-run) | Urn "ball" = a scrapped car forcing label=1; the fixed point is **over-scrapping**, not over-patrolling. Because the cutoff is absolute, drift shows up as *more* scrapping (not a held-constant rate) |
 | **02 Detection** | 4 falsifiable tests (below) on `model_v1_*` vs `model_v2a_*` | P15, P12, P4, P16, P27 | Step 2 becomes the **tautology check** `P(observed=1\|decision=1)=1.0`; Step 3 treats *scrapping* as the treatment |
 | **03 Unbiased eval** | Selective-labels-corrected AUC on the **garage-only** subset, reweighted to the full population; PU class-prior `π̂` for scrapped cars | P27, P3 (IPS), P6, P28 (PU), P18 | Evaluate on `decision==0` rows (true labels) and reweight by inverse P(garage); **also correct the OOT set** (it is inside the v1 log → contaminated) |
-| **04 Intervention** | Causal effect of *scrapping* on the forced-positive label; RDD at the **0.872 cutoff**; PSM/DML on propensity-to-scrap | P7, P8 (RDD/DiD), P4, P16, P5 (DAG) | The 0.872 absolute cutoff is a **textbook sharp RDD** — near-identical cars just above/below it. This is the cleanest natural experiment in the whole project |
+| **04 Intervention** | Causal effect of *scrapping* on the forced-positive label; RDD at the **per-version cutoff τ_v** (v2 = 0.872); PSM/DML on propensity-to-scrap | P7, P8 (RDD/DiD), P4, P16, P5 (DAG) | The absolute cutoff τ_v (precision-tuned; 0.872 for v2) is a **textbook sharp RDD** — near-identical cars just above/below it. This is the cleanest natural experiment in the whole project |
 | **05 Randomisation** | Policy that sends a budgeted fraction of high-score cars to the garage to recover oracle labels; regret vs cost | P19/P21 (Thompson), P20/P26 (UCB), P13 (cost of fairness), P14 | Exploration is **expensive and risky** (garage fee + possibly paying a true total loss's full value) — cost-benefit must be modelled explicitly, unlike cheap re-investigation |
 | **06 Mitigation** | Debias next-gen training data: downweight/relabel forced positives; IPW for garage rows; PU-imputed counterfactuals for scrapped rows | P3, P4, P16, P5, P27, P28 | Don't just reweight — the forced `outcome=1` on scrapped rows is *wrong*, so PU relabelling/`π̂`-correction matters as much as IPW |
 | **Ethics/Reg** | Disparate-impact check by `vehicle_make`/`damage_profile`; AI Act Art. 10 data-governance argument | P10, P22, P23, P24, P25 | "Protected segment" proxy is vehicle/damage profile, not postcode; the harm is **systematically over-scrapping** certain makes |
@@ -1326,15 +1284,20 @@ real columns:
    these have *zero* surviving oracle labels, so the model can never be corrected there
    without Build 05's deliberate garage routing.
 
-## 3. Why the absolute 0.872 cutoff matters to the logic
+## 3. Why the absolute cutoff τ_v (v2 = 0.872) matters to the logic
 
-Choosing an **absolute** cutoff (not a percentile) is what makes Builds 01–04 work:
+Choosing an **absolute** cutoff (not a percentile) is what makes Builds 01–04 work. Note the
+cutoff is not a fixed pipeline constant: each version is **re-tuned** to the smallest `τ_v`
+that holds **precision ≥ 0.985** on validation, and 0.872 is the value that tuning produced
+for v2. The precision constraint is what is held fixed; τ_v is what moves.
 
 - **Build 01/02**: score drift is *visible* as scrap-rate inflation (a percentile rule would
-  pin the rate and hide it).
+  pin the rate and hide it). Because precision is re-pinned to ≥ 0.985 each version by
+  re-tuning τ_v, the drift **cannot** show up in the precision metric — it surfaces only as
+  the cutoff shifting and the scrap rate inflating.
 - **Build 04 RDD**: a fixed score cutoff is a sharp discontinuity in treatment assignment —
   Imbens & Wooldridge (**P7**) / Angrist & Pischke (**P8**) RDD applies almost verbatim, with
-  bandwidth around 0.872.
+  bandwidth around the analysed version's τ_v (0.872 for v2).
 - **Caveat to carry into Build 03/06** (P24, P22): scores are **uncalibrated** (README), so
   using them as propensity weights injects bias. The application must either calibrate
   (Platt/isotonic) before reweighting or report this as a limitation.
@@ -1384,7 +1347,7 @@ SFPPipeline (pipeline.py) — orchestrates one model-version transition (v1 → 
       → corrected training frame for the *next* model version
 ```
 
-`ESTIMATE` (Build 04: RDD at 0.872, DiD, DML) lives as analysis modules the detector can call
+`ESTIMATE` (Build 04: RDD at the version's τ_v — 0.872 for v2, DiD, DML) lives as analysis modules the detector can call
 to quantify effect sizes for the report; it is not on the live mitigation path.
 
 ## 3. Implementation decisions that matter
@@ -1405,14 +1368,15 @@ to quantify effect sizes for the report; it is not on the live mitigation path.
   floor ("never divert below score X") guards precision (**P13**, README precision ≥ 0.985).
 - **Calibrate before you weight.** Wrap the raw model in a calibration step (Platt/isotonic)
   *inside* `DataLoader` or the corrector, since uncalibrated scores bias both IPW and any
-  probability read of the 0.872 cutoff (**P24**).
+  probability read of the per-version cutoff τ_v (0.872 for v2) (**P24**).
 
 ## 4. Synthetic → real cutover checklist
 
 1. Implement `RealDataLoader` to yield the same schema (`synth_data_structure.md`) — map
    Insurance Company. columns to `model_v{1,2}_*`, `repair_decision`, `*_observed_outcome`.
-2. Confirm the real scrap policy is the absolute 0.872 cutoff (or parameterise
-   `SCRAP_THRESHOLD`); the RDD bandwidth in Build 04 keys off it.
+2. Confirm the real scrap policy is an absolute per-version cutoff τ_v tuned to precision
+   ≥ 0.985 (0.872 for v2) and recover each version's tuned value into `SCRAP_THRESHOLD`; the
+   RDD bandwidth in Build 04 keys off the analysed version's τ_v.
 3. Re-fit propensity/calibration on real data; re-check overlap and `π̂` plausibility.
 4. Everything downstream (detector, mitigator, report) runs unchanged — that is the whole
    point of the Strategy split.
