@@ -15,6 +15,7 @@ repo/
 │
 └── src/
     ├── config.py
+    ├── figstyle.py           # canonical matplotlib style for all dissertation figures (spec: notebook/FIGURE_TEMPLATE.md)
     ├── docs/STRUCTURE.md · DESIGN.md · ENV_MANAGEMENT.md
     │
     ├── pipeline/
