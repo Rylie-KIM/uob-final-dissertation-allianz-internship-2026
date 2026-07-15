@@ -16,30 +16,43 @@ repo/
 └── src/
     ├── config.py
     ├── figstyle.py           # canonical matplotlib style for all dissertation figures (spec: notebook/FIGURE_TEMPLATE.md)
+    ├── threshold.py          # [plan] τ, in ONE place: tune() - fall back when cloned ML system don't have tuning logic · apply() · read_off()  — see § "τ has two sources"
     ├── docs/STRUCTURE.md · DESIGN.md · ENV_MANAGEMENT.md
     │
     ├── pipeline/
     │   └── pipeline.py
-    ├── detector/
+    ├── detector/             # "is there a loop?"        — (scores, labels); never opens a pkl
     │   ├── sfp_detector.py
     │   └── algorithm/
-    ├── mitigator/
+    ├── estimator/            # [plan] "how bad / by what mechanism?" — see § "Five layers"
+    │   ├── effect_estimator.py    # EffectEstimator ABC: assumptions() + falsify() + estimate()
+    │   ├── rdd.py                 # notebook 04_01 — τ as a sharp discontinuity (needs payout)
+    │   ├── shap_did.py            # notebook 04_02 — corruption footprint in the feature-dependence
+    │   └── logit_adjust.py        # notebook 04_03 — conditional odds ratio; falsify() FAILS by design
+    ├── mitigator/            # "how do we fix it?"
     │   ├── sfp_mitigator.py
     │   ├── corrector/
     │   └── policy/
+    ├── reeval/               # [plan] "what CHANGED?" — the only layer that reads TWO artefact sets
+    │   ├── reevaluator.py         # ReEvaluator: composes detector/estimator over (before, after)
+    │   └── metrics/               # ReEvalMetric ABC → DecisionFlipCount · DetectionDelta ·
+    │                              #   ShapDiDDelta (footprint erased?) · OracleValidation (SYNTHETIC-ONLY)
     ├── loaders/
     │   └── base.py · synthetic.py · real.py
     │
-    ├── scoring/
-    │   ├── ingest.py          # source log (manifest) → logs/<v>.parquet
+    ├── scoring/              # VERSION LAYER — runs inside env-vX; the only code that opens a pkl
+    │   ├── ingest.py          # source log (manifest) → logs/<v>.parquet   ("ingest" = the doorway
+    │   │                      #   for external artefacts: their name → our canonical name)
     │   ├── build_inputs.py    # logs/<v>.parquet → inputs/{features,labels}_<v>
-    │   ├── predict.py
+    │   ├── predict.py         # model + features → detection/<v>_scores
+    │   ├── attribute.py       # [plan] model + features → detection/<v>_attributions  (per-row |φ|;
+    │   │                      #   the sibling of predict.py — SHAP must run where the pkl unpickles)
     │   ├── score_all.sh
     │   └── load_scores.py
     ├── preprocessing/
     │   ├── base.py
     │   └── v1.py · v2.py · v3.py
-    ├── training/
+    ├── training/             # VERSION LAYER — runs inside env-vX
     │   ├── train.py           # BASELINE trainer (prep+model fresh on production label)
     │   ├── retrain.py         # MITIGATED retrainer (reuse baseline prep, weighted)
     │   ├── train_all.sh
@@ -56,16 +69,17 @@ repo/
     │       └── mitigated/ …
     │
     └── data/
-        ├── synthetic/
-        │   ├── run.py · evaluate.py
-        │   ├── generate/      # ← the ONLY data synthetic TESTS read (DGP output)
-        │   │   └── csv/ · parquet/   (+ parquet/features/)
+        ├── synthetic/         # ⚠ THE WHOLE SUBTREE IS A STAND-IN — deleted when real data lands.
+        │   │                  #   App code must NEVER import from it. Notebooks may use ALL of it.
+        │   ├── run.py · evaluate.py · export_thresholds.py
+        │   ├── generate/      # ← WORLD ①: the DGP. 70,000 rows × 54 cols; v1/v2a/v2b/v3a/v3b.
+        │   │   └── csv/ · parquet/   (+ parquet/features/)     What every NOTEBOOK reads today.
         │   ├── script/
-        │   ├── logs/          #  ┐ staged-artefact dirs: NOT a test-data source —
-        │   ├── inputs/        #  │ a synthetic dry-run of the real-data pipeline,
-        │   ├── detection/     #  │ built to lock the app structure BEFORE real
-        │   ├── mitigation/    #  │ Allianz resources are wired in
-        │   └── reeval/        #  ┘ (mirror exactly under data/real/)
+        │   ├── logs/          #  ┐ WORLD ②: the app dry-run. 4,000 rows × 2 feats (make,
+        │   ├── inputs/        #  │ repair_ratio), v1/v2/v3, from model_repos/practice/.
+        │   ├── detection/     #  │ Unrelated to ① — a scaffold that proves the app WIRING,
+        │   ├── mitigation/    #  │ not a dataset anyone analyses. Mirrors data/real/ exactly.
+        │   └── reeval/        #  ┘ (see § "Three worlds", and the two @TODOs there)
         └── real/
             ├── logs/
             ├── inputs/
@@ -90,13 +104,197 @@ repo/
 
 > **Note — `data/` is data-only; code lives in the layer packages.** Source-first means the synthetic *generator* (`run.py`, `generate/` — which holds the DGP output `csv/` + `parquet/` — and `script/`) and the *staged artefacts* (`logs/`, `inputs/…reeval/`) sit under the **same** `data/synthetic/` node — the generator is what makes this source. The stage dirs (`logs/` + the four `inputs/…reeval/`) mirror exactly under `data/real/` (which has no generator — real data arrives from Allianz). Analysis/pipeline **code never lives in `data/`**: log-ingestion (`ingest.py`), the log→inputs split (`build_inputs.py`), and score-ingestion (`load_scores.py`) live under `scoring/`, and the planned `DataLoader` classes under `loaders/` — keeping `data/` purely for stored artefacts.
 
-> **Note — synthetic tests read ONLY `data/synthetic/generate/` (added 2026-07-06).** Every test / experiment / notebook that runs on synthetic data sources its data **exclusively** from `data/synthetic/generate/` — the DGP output produced by `run.py`: `generate/csv/`, `generate/parquet/`, and `generate/parquet/features/`. Nothing else counts as a synthetic test input. The other `data/synthetic/` subtrees — `logs/`, `inputs/`, `detection/`, `mitigation/`, `reeval/` — are **not test data**: they are a synthetic **dry-run of the real-data pipeline**, materialised only to pin down and validate the application structure (the source→stage layout, ingest/build/score/retrain wiring) **before** any real Allianz resource is connected. They exist so the app skeleton is finalised against synthetic stand-ins first; once real data arrives it flows through the identical `data/real/{logs,inputs,detection,mitigation,reeval}/` tree. Treat them as scaffolding for the real-data integration, never as a dataset the synthetic tests consume.
+> **Note — synthetic tests read ONLY `data/synthetic/generate/` (added 2026-07-06; ~~superseded 2026-07-14~~).** ⚠️ **The restrictive half of this note is retired — see § "Three worlds" and § "The one invariant" below.** Notebooks may now use **anything** under `src/data/synthetic/`, including `generate.*`. What survives from the original note, and is still true: the `logs/` · `inputs/` · `detection/` · `mitigation/` · `reeval/` subtrees are **not a dataset anyone analyses** — they are a synthetic **dry-run of the real-data pipeline**, materialised only to pin down and validate the application wiring (source→stage layout; ingest/build/score/retrain) **before** any real Allianz resource is connected. Once real data arrives it flows through the identical `data/real/{logs,inputs,detection,mitigation,reeval}/` tree. Treat them as scaffolding for the real-data integration.
 
 > **Note — log ingestion is the one name-translation point (added 2026-07-06).** Each model application emits its production log under whatever name IT chose (`log_v2.parquet` here; on real data e.g. `v2_prod_scored_2025Q1.parquet`). This pipeline expects one canonical per-version name, `logs/<v>.parquet`. `scoring/ingest.py` is the SINGLE place that translates "their name → our name": it reads the source path from `data/<source>/logs/manifest.json`, validates the required schema (`claim_id`, `observed_outcome`, `true_garage_outcome`, `model_<v>_decision`), and archives a copy as `logs/<v>.parquet`. Everything downstream (`build_inputs.py`) reads only the canonical `logs/`, so when a file name changes you edit `manifest.json` alone — no pipeline code changes.
 
 > **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/{ingest,build_inputs,predict}.py`, `score_all.sh`, `load_scores.py`); the **training I/O** (`training/train.py` = baseline trainer, `training/retrain.py` = mitigated retrainer, `train_all.sh`); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
 
-> **Per-version features, built through each version's own repo (both sources).** Each version is scored on its own `inputs/features_<v>.parquet`, produced by **that version's repo preprocessing** — the `preprocessing/v{1,2,3}.py` adapters run each repo's feature builder. This is now **identical for synthetic and real** (decided 2026-07-03): synthetic is only a temporary stand-in, so it goes through the *same* external-repo path, not a special shared recipe. The single difference is where the raw claims come from — synthetic **generates** them (`data/synthetic/` DGP), real **receives** them from Allianz. Because v1/v2/v3 preprocessing genuinely diverges (`V2/V3FeatureBuilder`; `problem.md` §2.5 #10/#11), `features_<v>` files differ across versions on **both** sources. See `DESIGN.md` § "Per-version feature matrices".
+> **Per-version features, built through each version's own repo (both sources).** Each version is scored on its own `inputs/features_<v>.parquet`, produced by **that version's repo preprocessing** — the `preprocessing/v{1,2,3}.py` adapters run each repo's feature builder. This is now **identical for synthetic and real** (decided 2026-07-03): synthetic is only a temporary stand-in, so it goes through the *same* external-repo path, not a special shared recipe. The single difference is where the raw claims come from — synthetic **generates** them (`data/synthetic/` DGP), real **receives** them from Allianz. Because v1/v2/v3 preprocessing genuinely diverges (`V2/V3FeatureBuilder`; `problem.md` §2.5 #10/#11), `features_<v>` files differ across versions on **both** sources. See `DESIGN.md` § "Per-version feature matrices". **This invariant is load-bearing and must be kept** — see § "What synthetic cannot rehearse" below.
+
+---
+
+## Three worlds (clarified 2026-07-14)
+
+Three *unrelated* datasets live in this repo, and confusing them has already cost time. They are:
+
+| | what it is | size | versions | who reads it |
+|---|---|---|---|---|
+| **① DGP** `data/synthetic/generate/` | synthetic claims + simulated production models, made by `run.py` | **70,000 × 54** | v1, v2a, v2b, v3a, v3b | **every notebook** |
+| **② app dry-run** `data/synthetic/{logs,inputs,detection,mitigation,reeval}/` | a toy pipeline pass, fed by `model_repos/practice/fttl-v{1,2,3}/` | **4,000 × 2** (`make`, `repair_ratio`) | v1, v2, v3 | **the app** (`SFPPipeline`) |
+| **③ real** `data/real/` | the actual Allianz logs + version repos | — | v1, v2, v3 | nothing yet |
+
+**① and ② are not connected.** Different rows, different features, different version names. The
+consequence, stated plainly so nobody rediscovers it: **the dissertation's METHOD grows on ①, while
+the app's STRUCTURE grows on ②.** That is deliberate for now — ① is where the research happens, ② is
+where the wiring is proven — but it means the app has only ever been exercised on a 2-feature toy.
+
+**What ① actually is.** The DGP is not "a test fixture". It plays the role of **Allianz's whole
+Version Layer**: it manufactures claims, trains each model version, applies each version's τ, and
+emits scores/decisions/observed outcomes. It is the stand-in for *real claims + real production
+logs*. `model_repos/practice/` is a separate stand-in for *real model code*.
+
+**The target state**, once real resources land: the DGP's output enters through the **same canonical
+doorway** real data uses (`logs/<v>.parquet` → `inputs/`), so the Analysis Layer never learns whether
+it is looking at synthetic or real. That is the design; it is **not built yet**:
+
+- **@TODO (real-data arrival)** — connect ① to the canonical doorway, *or* delete it. Blocked today
+  because we clone the v1/v2/v3 model repos, and a pre-baked 70k dataset does not respect that
+  contract.
+- **@TODO (real-data arrival)** — retire ② and `model_repos/practice/`.
+- **@TODO (real-data arrival)** — delete `data/synthetic/` entirely; **nothing else should change.**
+  If deleting it breaks app code, the invariant below has been violated.
+
+## The one invariant
+
+> **Application code — `detector/` `estimator/` `mitigator/` `reeval/` `pipeline/` `scoring/`
+> `training/` — must NEVER import `generate.*`.**
+> **Notebooks may import anything under `src/data/synthetic/`, `generate.*` included.**
+
+That is the whole rule, and it is mechanically checkable. Notebooks are a workbench for picking the
+logic apart on synthetic data; coupling them to the DGP costs nothing, because when real data lands
+only their *data paths* change. Application code is different: it must survive the deletion of
+`data/synthetic/`, so it may only ever touch canonical artefacts.
+
+## Five layers, split by which artefacts each one opens
+
+The layer boundaries are not conceptual — they follow mechanically from **what each layer must read**:
+
+| layer | reads | answers | opens a pkl? |
+|---|---|---|---|
+| `detector/` | `detection/<v>_scores` + `inputs/labels_<v>` | **Is there a loop?** | no |
+| **`estimator/`** ★ | the above + `detection/<v>_attributions` + τ | **How harmful? By what mechanism?** | **no** — see below |
+| `mitigator/` | `inputs/{features,labels}_<v>` | **How do we fix it?** | no |
+| **`reeval/`** ★ | **TWO artefact sets** (before + after) | **What changed?** | no |
+| `scoring/` · `training/` | the model itself | (produces everything above) | **yes — only these** |
+
+**Why `estimator/` is its own layer.** SHAP needs the *model function*, not just its scores — which
+naively makes it the first analysis layer that must open a pkl. It must not. **The pkls only unpickle
+inside their version env** (they carry that repo's `FeatureBuilder`; loading `models/*/baseline/v1.pkl`
+from the analysis `.venv` raises `ModuleNotFoundError: fttl_v1`, and this will be equally true of the
+real pkls). So attribution runs in the Version Layer — **`scoring/attribute.py`, the sibling of
+`predict.py`** — and emits `detection/<v>_attributions.parquet`. `estimator/` then reads that parquet
+and never touches a model. The two-layer split is preserved.
+
+**Why `estimator/` mandates `assumptions()` and `falsify()`.** RDD and DiD are identified only under
+assumptions that are, in general, **untestable** (parallel trends; continuity at the cutoff). P7's
+discipline is: state them, test their observable implications, bound the damage when they fail. The
+ABC encodes that discipline in the type system — **an estimator that has not run its falsification
+gates cannot report a number.** (Notebook 04-01 gates the RDD on density / covariate continuity /
+placebo cutoffs; 04-02 *measures* the parallel-trends bias with a version pair that carries no
+corruption at either end.)
+
+**Why `reeval/` is its own layer.** It is not a new kind of measurement — it **composes** the detector
+and the estimators over two artefact sets and diffs them. It earns a layer because of one thing only:
+metrics that **cannot exist for a single model**. `DecisionFlipCount` is the first citizen — "how many
+cars change fate" is undefined unless you hold two models side by side. `OracleValidation` (AUC against
+`true_garage_outcome`) also lives here, and its type says out loud what a comment currently only
+whispers in `pipeline.cycle()`: **it is synthetic-only and cannot run on real Allianz data.**
+
+**`ShapDiDDelta` — the sharpest re-eval metric, because it re-runs an `EffectEstimator` (added
+2026-07-15).** The corruption footprint of § "Positivity is dead at τ" is measured *between baseline
+model versions* (v2a → v3a). Nothing stops us measuring the **same DiD between the mitigated
+versions** and differencing:
+
+```
+footprint_before = ShapDiDEstimator(v2a_baseline,  v3a_baseline )     ( the contaminated world )
+footprint_after  = ShapDiDEstimator(v2a_mitigated, v3a_mitigated)     ( the de-contaminated world )
+ShapDiDDelta     = footprint_before − footprint_after                 ( how much the corrector erased )
+```
+
+This is strictly stronger evidence than `DetectionDelta`. Δ`peak0` says a *score-space* symptom
+eased; `ShapDiDDelta` says the corrector actually **collapsed the mechanism** — if mitigation worked,
+`footprint_after` should fall toward zero, i.e. the mitigated models should look like models trained
+in a world where the forcing never happened. It is the **observational twin of the notebook's positive
+control**: 04-02 Phase 2 *injects then removes* corruption by hand and watches the DiD respond; here a
+real corrector removes it and the same estimator watches. The tool is reused verbatim — this is exactly
+what "`reeval/` composes the estimators over two artefact sets" means. Two cautions, both mechanical
+consequences of what it is: (i) it is a DiD, so `falsify()` (the parallel-trends probe) **must re-run on
+the mitigated pair** — the ABC makes that automatic; (ii) the mitigated models are trained on
+IPS-corrected data that is **empty above τ**, so `footprint_after`'s partition B rests on extrapolation
+— report the same "rows above τ" diagnostic beside it.
+
+## τ has two sources, and only one of them is tuned
+
+`src/threshold.py` holds three **pure functions** — the policy, in one place. It is *not* where τ is
+computed; tuning still *executes* in the version env. Today the rule is duplicated in
+`generate/model.py::_tune_threshold` and `export_thresholds.py`, and is **missing from `retrain.py`
+altogether**.
+
+```python
+tune(y, scores, target=0.985, fallback=0.872)   # the rule: lowest cutoff whose precision ≥ target
+apply(scores, tau)                              # decision = score ≥ τ          (universal, env-free)
+read_off(scores, decisions)                     # τ as an OBSERVED FACT, from the log
+```
+
+| τ | what it is | how it is obtained | env needed |
+|---|---|---|---|
+| `detection/<v>_tau` (**production**) | **a thing that happened** | **`read_off`** — the boundary in the log. Never recomputed. | no |
+| `reeval/<v>_tau` (**mitigated model**) | a model that never ran in production | **must be tuned** → `training/retrain.py`, inside env-vX | yes |
+
+**Why `read_off` rather than "just tune it again".** (a) A production log ships `score` and `decision`
+columns, not a τ. (b) A *documented* τ need not be the τ that produced the decisions — 04-01 already
+found this (`applied_tau` vs `chosen_tau_oot`, and `applied_tau` is stored to 4 d.p., so it can sit a
+rounding hair off the true boundary). (c) **And this is the real reason:** its validation step,
+`max{score | decision=0} < min{score | decision=1}`, is a **one-line test of whether treatment
+assignment is deterministic** — and that answer decides the entire mitigation strategy (below). Run it
+first on real data.
+
+**Why τ_mit must be tuned inside `retrain.py`, and not in the analysis layer.** Tuning needs an
+out-of-sample **validation slice**; scoring the whole corrected set and tuning on *that* is in-sample,
+gives optimistic precision, lands τ too low, and silently over-scraps. Only the trainer knows the
+split. Moreover the split and the tuning rule should be **the version repo's own** (dynamic import,
+exactly as `train.py` already does for `V{N}FeatureBuilder`) — `threshold.tune` is the *fallback* when
+a repo exposes neither. This extends the existing **re-evaluation invariant** ("reuse the baseline's
+fitted `prep` verbatim; only the label may differ") to the split and the cutoff rule.
+
+> **@TODO** `train.py` / `retrain.py` currently make **no validation split at all** and tune **no τ**.
+> Both are needed before `DecisionFlipCount` can run on the app path.
+
+## Positivity is dead at τ — a constraint on the whole mitigation layer
+
+Measured on the DGP (v2a, 2022+, 23,225 rows), and **this is a property of the data, not of any
+corrector implementation**:
+
+```
+max score among GARAGED rows  = 0.9761
+min score among SCRAPPED rows = 0.9762        ← the overlap is exactly zero
+rows above τ:  124 total  |  garaged 0  |  scrapped 124
+```
+
+The routing rule is a **hard cutoff**, so P(scrap | x) ∈ {0, 1}: **positivity/overlap fails by
+construction**, not merely in this sample. Any corrector that keeps only `decision == 0` rows is
+therefore **structurally blind above τ** — no reweighting can represent a region with zero retained
+rows. Consequences, which the architecture must respect:
+
+- **Never tune τ on IPS-corrected data, and never IPS-weight precision *at* τ** — both are a literal
+  0/0. (Weighted **AUC** survives, because it integrates over the whole score range. Build 00
+  currently weights AUC but not precision — which is the wrong way round, since precision ≥ 0.985 is
+  the business constraint. The fix is **not** "add weighted precision at τ".)
+- **The standard overlap diagnostics do not notice.** With the current corrector recipe: max weight
+  3.46, zero rows clipped, ESS = 99.7 % of kept rows — a clean bill of health while the estimator is
+  undefined. They are population-level; the failure is local to the cutoff. **The diagnostic that
+  matters is "how many retained rows lie above τ", and it is zero.**
+- **This is why the rest of the thesis exists.** Deterministic assignment is precisely the case in
+  which IPS and matching are not identified — and precisely the case RDD was invented for (P7).
+  Identification above τ has to come from somewhere else: **continuity at the cutoff** (RDD, 04-01),
+  **PU relabelling of the scrapped rows** (P28), or **deliberately injected randomness** (Build 05) —
+  exploration is what *manufactures* the positivity IPS needs. **IPS alone cannot fix a
+  deterministic-threshold SFP loop.**
+- Consequently `DecisionFlipCount` reports **two arms**: **fixed-τ** (hold τ = τ_base — the only
+  identified arm; "at the company's current cutoff, how many cars change fate once the model is
+  de-contaminated?") and **re-tuned-τ**, which is *not* a second estimate but a **demonstration of the
+  failure** — it reports the zero.
+
+## What synthetic cannot rehearse
+
+The DGP gives all versions the **same 86-column feature matrix**. Real v1/v2/v3 genuinely diverge in
+preprocessing *and* in feature **set** (real v2's top feature is `location_Home`, absent elsewhere).
+So the synthetic data **cannot rehearse the most dangerous real-data property**, and the estimators
+must guard against it themselves rather than assume it away. Notebook 04-02 opens with
+`assert` that the three feature matrices have identical columns — **that assertion is designed to fire
+on real data**, and when it does, the response is to restrict to the intersection of the feature sets
+or to freeze preprocessing, never to compare SHAP across differently-preprocessed pipelines.
 
 ## Data Flow
 

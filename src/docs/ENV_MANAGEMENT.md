@@ -132,6 +132,16 @@ uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/sy
 
 **Training, re-training and preprocessing also run in the per-version env.** `src/training/train.py` (baseline pkl), `src/training/retrain.py` (mitigated pkl, re-evaluation) and `src/preprocessing/v{1,2,3}.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py` — because all load or build that version's model and so need its repo importable. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. The **log-ingestion** step (`scoring/ingest.py` → `logs/<v>.parquet`) and the log→inputs split (`build_inputs.py`) touch no model and run in the analysis `.venv`. Note *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
 
+### `shap` belongs in the per-version envs too *(added 2026-07-14)*
+
+**`src/scoring/attribute.py`** — the planned sibling of `predict.py`, emitting per-row SHAP attributions to `detection/<v>_attributions.parquet` for the `estimator/` layer — runs in the **per-version env**, for the same reason `predict.py` does: SHAP needs the model *object*, and a pkl only unpickles where its repo is importable (loading `models/*/baseline/v1.pkl` from the analysis `.venv` raises `ModuleNotFoundError: fttl_v1`). That has a concrete env consequence:
+
+> **`shap` must be installed and pinned in `env-v1`/`env-v2`/`env-v3`**, not only in the analysis `.venv` — and independently per version, because each env's XGBoost differs and `shap`'s tree parser is coupled to the XGBoost model format.
+
+That coupling is not hypothetical: `shap` 0.49 fails on XGBoost 3.x with `ValueError: could not convert string to float: '[1.4605759E-1]'` (the newer format stores `base_score` as a vector), and needs ≥ 0.51. Expect to pin a **different `shap` per version**, exactly as with XGBoost itself — which is precisely the "flat library pool" argument for separate envs, playing out again.
+
+The analysis `.venv` also carries `shap` (added via `uv add shap "numba>=0.60"`), but **only for the notebooks**, which retrain their own models on the DGP and so hold real model objects. The `numba>=0.60` floor is required: without it the resolver selects `numba` 0.53, whose `llvmlite` 0.36 fails to build on Python 3.11 / arm64. No application code in the analysis layer may load a model.
+
 ---
 
 ## Typical workflow (summary)

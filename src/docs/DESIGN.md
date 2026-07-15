@@ -1,6 +1,8 @@
 # Design Pattern
 
 > **Implementation status (2026-07-04, Analysis-Layer OO built).** This document describes the **target** design; the current synthetic chain runs it end-to-end. Exists and working today: `config.py`, the design docs (under `src/docs/`), `scoring/{ingest,build_inputs,predict}.py` + `score_all.sh` + `load_scores.py`, `training/{train,retrain}.py` + `train_all.sh`, the canonical log landing zone `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`), the per-version envs at `src/envs/{v1,v2,v3}/`, the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC) — and the source→stage data tree `data/synthetic/{inputs,detection,mitigation,reeval}/` with all pkls under `src/models/synthetic/{baseline,mitigated}/`. Still design-only: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/`+`models/real/` side. See `STRUCTURE.md` for the authoritative status. The two layers named there map onto this doc as: **Version Layer** = the per-version scoring/(re)train envs; **Analysis Layer** = the pipeline/detector/mitigator that loads no model.
+>
+> **Added to the target design 2026-07-14, all design-only:** `estimator/` (`EffectEstimator` ABC → `RDDEstimator` · `ShapDiDEstimator`), `reeval/` (`ReEvalMetric` ABC → `DecisionFlipCount` · `DetectionDelta` · `OracleValidation`), `scoring/attribute.py` (per-row SHAP, Version Layer), and `src/threshold.py` (`tune` · `apply` · `read_off`). The methods they formalise **already exist and run in the notebooks** (04-01 RDD, 04-02 SHAP-DiD) on the DGP; promoting them into the app is what these packages are for.
 
 ## Strategy Pattern
 
@@ -8,27 +10,49 @@ Each interchangeable component is encapsulated as a separate class behind a comm
 
 This means swapping synthetic data for real data, or swapping one detection algorithm for another, requires changing only the injected class — not the core logic.
 
-## Three Strategy Axes
+## Five Strategy Axes  *(was three; `EffectEstimator` and `ReEvalMetric` added 2026-07-14)*
 
 | Axis | Interface | Implementations |
 |---|---|---|
 | Data loading | `DataLoader` | `SyntheticDataLoader` → `RealDataLoader` |
 | Score ingestion | precomputed parquet | one score file per model version, merged on `claim_id` |
-| Detection | `DetectionAlgorithm` | TBD (pending research) |
+| Detection | `DetectionAlgorithm` | `ResidualPeakAlgorithm` |
+| **Effect estimation** ★ | **`EffectEstimator`** | `RDDEstimator` (nb 04-01) · `ShapDiDEstimator` (nb 04-02) · `LogitAdjustEstimator` (nb 04-03) |
 | Investigation policy | `InvestigationPolicy` | TBD (pending research) |
-| Training data correction | `TrainingDataCorrector` | TBD (pending research) |
+| Training data correction | `TrainingDataCorrector` | `IPSCorrector` |
+| **Re-evaluation** ★ | **`ReEvalMetric`** | `DecisionFlipCount` · `DetectionDelta` · `ShapDiDDelta` · `OracleValidation` (synthetic-only) |
 
 ## Class Responsibilities
 
 **`SFPPipeline`** — orchestrates the full run. Calls detector, checks result, calls mitigator if SFP is detected.
 
-**`SFPDetector`** — diagnosis. Loads data and runs detection algorithms. Returns a `DetectionReport`.
+**`SFPDetector`** — diagnosis. *Is there a loop?* Runs a `DetectionAlgorithm` over (scores, labels). Oracle-free; opens no model. Returns a `DetectionReport`.
+
+**`EffectEstimator`** ★ — *how harmful is it, and by what mechanism?* Distinct from detection: the detector returns a yes/no, an estimator returns a **causal quantity** (04-01: the effect of the scrap decision, in £; 04-02: the label-corruption footprint in the model's feature-dependence structure). Its ABC deliberately mandates three methods, not one:
+
+```python
+class EffectEstimator(ABC):
+    @abstractmethod
+    def assumptions(self) -> list[Assumption]: ...          # named, not buried in a docstring
+    @abstractmethod
+    def falsify(self, data) -> FalsificationReport: ...     # gates that CAN fail
+    @abstractmethod
+    def estimate(self, data) -> EffectReport: ...           # refuses to report if the gates failed
+```
+
+RDD and DiD are identified only under assumptions that are in general **untestable** (continuity at the cutoff; parallel trends). The discipline that makes them usable — state them, test their observable implications, bound the damage when they fail (Imbens & Wooldridge, P7) — is here encoded in the **type system**: an estimator that has not run its falsification gates cannot emit a number. This is the project's methodological claim, made structural.
+
+`LogitAdjustEstimator` (nb 04-03) is the third implementation, and it is the one where the ABC earns its keep as a **guard against a negative result being mis-reported as positive**. It fits `logit(Y) ~ γ₀ + γ₁·T + γ₂·X` and would read the FTTL effect off `exp(γ₁)`; `statsmodels.Logit` hands back `exp(γ₁)`, the Wald p-value, and the likelihood-ratio p-value directly, so `estimate()` is a few lines. Its `assumptions()` are **unconfoundedness + overlap**, and its `falsify()` gate **fails on this problem by construction**: reading T as the scrap *decision* destroys overlap (`T=1 ⇒ Y=1`, zero honest labels in the treated region — the positivity-dead-at-τ fact), and reading T as the FTTL *era* destroys unconfoundedness (the market confound of 04-02, plus the outcome label changing meaning across the regime). The value is exactly that the gate turns "the most familiar estimator doesn't work here" into an automatic, typed refusal rather than something a reviewer has to catch — and the *way* it fails re-confirms the SFP structure. This is what `statsmodels` is in the analysis env for (04-02 used a bootstrap because HHI has no coefficient to test).
 
 **`SFPMitigator`** — prescription. Takes the report and applies mitigation: updates investigation policy and corrects training data.
+
+**`ReEvaluator`** ★ — *what changed?* The only component that reads **two** artefact sets (before-mitigation and after-mitigation). It **composes** the detector and the estimators over both and diffs them — it re-implements nothing. It earns its own layer for one reason: metrics that **cannot exist for a single model**. `DecisionFlipCount` is the first — "how many cars change fate" is undefined unless two models are held side by side. `OracleValidation` (AUC vs `true_garage_outcome`) also lives here, and its type states what `pipeline.cycle()` currently only says in a comment: **synthetic-only; it cannot run on real Allianz data.**
 
 **`DataLoader`** — abstract base for data ingestion. Concrete implementations differ; callers do not.
 
 **Score ingestion** — the pipeline does **not** load models or run inference. Each model version is scored offline, once, inside its own environment (see below); the resulting per-version score files are merged on `claim_id` and consumed by the detector. This keeps the analysis runtime free of any model dependency.
+
+**Attribution ingestion** ★ — the same rule, extended. SHAP needs the model *function*, not merely its scores, which would naively force `EffectEstimator` to open a pkl — and **it must not**, because a pkl only unpickles inside its own version env (loading `models/*/baseline/v1.pkl` from the analysis `.venv` raises `ModuleNotFoundError: fttl_v1`, and the real pkls will behave identically). Attribution therefore runs in the **Version Layer** — `scoring/attribute.py`, the sibling of `predict.py` — and emits `detection/<v>_attributions.parquet` (per-row φ). `estimator/` reads that parquet and never touches a model. See `STRUCTURE.md` § "Five layers".
 
 ---
 
@@ -62,8 +86,8 @@ Model versions will also continue to be updated over time, so the design must ab
 
 **Scoring and analysis are fully decoupled.**
 
-1. **Scoring stage** — each model version is scored **once**, inside its **own** environment (`env-v1` / `env-v2` / `env-v3`, built with uv — see `ENV_MANAGEMENT.md`), by a single version-agnostic script (`src/scoring/predict.py`). The active environment *is* that version's environment, so there is never a cross-version import conflict in a single process. Output: one parquet score file per version.
-2. **Analysis stage** — the pipeline (detector/mitigator) runs in one environment and **never loads a model**. It reads the precomputed per-version score files and merges them on `claim_id`.
+1. **Scoring stage** — each model version is scored **once**, inside its **own** environment (`env-v1` / `env-v2` / `env-v3`, built with uv — see `ENV_MANAGEMENT.md`), by a single version-agnostic script (`src/scoring/predict.py`). The active environment *is* that version's environment, so there is never a cross-version import conflict in a single process. Output: one parquet score file per version. **`scoring/attribute.py` is its sibling** and runs in exactly the same way, emitting per-row SHAP attributions instead of scores — because SHAP needs the model object, and the model object only exists inside this env.
+2. **Analysis stage** — the pipeline (detector / **estimator** / mitigator / **reeval**) runs in one environment and **never loads a model**. It reads the precomputed per-version score **and attribution** files and merges them on `claim_id`.
 
 Because the two stages never share a process, there is no parent/child coordination, no temp-file marshalling, and no stdout parsing. Scores are cached on disk, so re-running the analysis any number of times does not re-score anything.
 
@@ -157,6 +181,12 @@ if __name__ == "__main__":
 
 Holding `prep` (and the features) fixed across baseline→mitigated means the only thing that changes is the **label/weight**, so the before→after score difference is attributable to the mitigation (the re-evaluation invariant, `problem.md` §2.5 #12). On real/practice data the fit can instead delegate to the repo's own trainer rather than re-implementing it; the sketch below illustrates the swappable-label contract.
 
+> **The invariant extends to the split and to τ (added 2026-07-14).** A decision is `score ≥ τ`, so a *decision*-level comparison (`DecisionFlipCount`) needs a τ for the mitigated model — and that model never ran in production, so its τ **must be tuned**. Two things follow.
+> **(1) Tuning belongs here, not in the analysis layer.** It needs an out-of-sample **validation slice**; tuning on the model's own re-scored output is in-sample, gives optimistic precision, lands τ too low, and silently over-scraps. Only the trainer knows the split.
+> **(2) The split and the tuning rule must be the version repo's own**, imported dynamically exactly as `train.py` already does for `V{N}FeatureBuilder`. Inventing our own split would mean baseline and mitigated tune τ on *different* slices — which alone would move the decision count, re-introducing the confound the invariant exists to kill. `src/threshold.py::tune` (the project's canonical rule: lowest cutoff whose precision ≥ 0.985) is the **fallback**, for when a repo exposes neither.
+>
+> **@TODO** — `train.py` and `retrain.py` today make **no validation split at all** and tune **no τ**. Both are prerequisites for `DecisionFlipCount` on the app path. See `STRUCTURE.md` § "τ has two sources".
+
 ```python
 # src/training/retrain.py  (runs inside env-vX)
 import argparse, joblib, pandas as pd
@@ -186,7 +216,15 @@ if __name__ == "__main__":
     main()
 ```
 
-> **Re-evaluation loop.** `SFPMitigator` (analysis env) writes `data/synthetic/mitigation/<v>_corrected.parquet` → `retrain.py` (version env) fits `models/synthetic/mitigated/<v>.pkl` → `predict.py` (version env) emits `data/synthetic/reeval/<v>_mitigated_scores.parquet` → `SFPDetector` (analysis env) compares baseline vs mitigated. Same file-only decoupling as scoring; no model is ever loaded in the analysis env. (Real-data source uses the identical `data/real/…` + `models/real/…` layout.)
+> **Re-evaluation loop.** `SFPMitigator` (analysis env) writes `data/synthetic/mitigation/<v>_corrected.parquet` → `retrain.py` (version env) fits `models/synthetic/mitigated/<v>.pkl` **and tunes `reeval/<v>_tau` on the repo's own validation split** → `predict.py` (version env) emits `data/synthetic/reeval/<v>_mitigated_scores.parquet` → **`ReEvaluator` (analysis env)** compares baseline vs mitigated. Same file-only decoupling as scoring; no model is ever loaded in the analysis env. (Real-data source uses the identical `data/real/…` + `models/real/…` layout.)
+>
+> **What the comparison consists of (revised 2026-07-14).** Previously this step was just "run `SFPDetector` again and diff `peak0`". That is one metric among several, and it lives entirely in **score space** — the *policy* is never re-derived, so it cannot say whether any car's fate actually changed. `ReEvaluator` therefore holds a list of `ReEvalMetric`s:
+> - **`DetectionDelta`** — the old behaviour: re-run the detector on both artefact sets, report Δ`peak0`. Composition, not re-implementation.
+> - **`DecisionFlipCount`** — `apply(τ)` to both score sets and count `1→0` (**rescued**: would have been scrapped, now goes to a garage) and `0→1` (**newly scrapped**). This is the first metric that needs a **policy**, and the first that is **undefined for a single model**. It is also the only quantity in the project with a unit a business reads directly: *cars per year*.
+> - **`ShapDiDDelta`** ★ — re-runs `ShapDiDEstimator` on the **mitigated** version pair and differences it against the baseline pair: `footprint_before − footprint_after`. A pure **composition** of an `EffectEstimator` over the two artefact sets — the layer's defining move. Strictly stronger than `DetectionDelta`: Δ`peak0` says a score-space symptom eased, `ShapDiDDelta` says the corrector **collapsed the mechanism** (`footprint_after → 0` ⇒ the mitigated models resemble ones trained where the forcing never happened). It is the observational twin of notebook 04-02's positive control. Because it is a DiD, `falsify()` (the parallel-trends probe) re-runs on the mitigated pair automatically, and its partition B rests on IPS-corrected data that is empty above τ — carry the "rows above τ" diagnostic. See `STRUCTURE.md` § "Why `reeval/` is its own layer".
+> - **`OracleValidation`** — AUC against `true_garage_outcome`. **Synthetic-only, by type**: no such column exists in real Allianz data. It currently sits in `pipeline.cycle()` guarded only by a comment.
+>
+> **`DecisionFlipCount` reports two arms, and only one of them is identified.** **fixed-τ** (hold τ = τ_base) asks *"at the company's current cutoff, how many cars change fate once the model is de-contaminated?"* — no extra assumption. **re-tuned-τ** asks what the company *would* have chosen in an uncontaminated world — and on FTTL data that arm **cannot be computed**, because an IPS-corrected training set retains **zero rows above τ** (the routing rule is a hard cutoff, so overlap there is exactly zero). It is reported not as a second estimate but as a **demonstration of that failure**. See `STRUCTURE.md` § "Positivity is dead at τ".
 
 ### Where per-version code lives — repo-owned logic, `src/` adapters
 
