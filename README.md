@@ -1,5 +1,4 @@
-# uob-final-dissertation-internship-2026
-
+# ML Self-Fulfilling Prophecy Detection & Mitigation
 
 Identifying and Mitigating Self-Fulfilling Prophecy Loops in Machine Learning 
 

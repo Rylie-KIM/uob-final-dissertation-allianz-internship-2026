@@ -1099,6 +1099,186 @@ Cite in the problem-framing and related-work sections as the applied precedent. 
 
 ---
 
+## Part 10 — Model Interpretability / Feature Attribution (2017–present)
+
+---
+
+### P39 · Lundberg & Lee (2017) — A Unified Approach to Interpreting Model Predictions (SHAP)
+
+**Citation**
+Lundberg, S. M. & Lee, S.-I. (2017). "A Unified Approach to Interpreting Model Predictions." *Advances in Neural Information Processing Systems (NeurIPS/NIPS)* 30, 4765–4774.
+
+**Link** → https://arxiv.org/abs/1705.07874 | https://proceedings.neurips.cc/paper/2017/hash/8a20a8621978632d76c43dfd28b67767-Abstract.html
+**Citations** ≈ 30,000+ (Google Scholar, 2026) · **Venue** *NeurIPS 2017* (A* CORE ranking) — **the canonical SHAP origin paper**
+
+**Why this paper matters**
+This is the source paper for **SHAP (SHapley Additive exPlanations)** — the feature-attribution method used in the SHAP-DiD analysis (notebook `04_02`). The dissertation does not merely *use* SHAP as a black box; the SHAP-DiD probe treats each feature's SHAP contribution as the outcome variable in a difference-in-differences design across model versions, so the theoretical guarantees established here (local accuracy, consistency, uniqueness) are what make it valid to compare a feature's attribution *across* v2a and v3a. Without a consistent attribution method, a shift in a feature's importance between versions could be an artefact of the explainer rather than a real change in model reliance.
+
+**Summary**
+Unifies six existing feature-attribution methods (LIME, DeepLIFT, Layer-Wise Relevance Propagation, Shapley regression/sampling values, QII) under a single class of **additive feature-attribution** models. Proves that within this class there is a **unique** solution satisfying three desirable properties — local accuracy, missingness, and consistency — and that this solution is the classical Shapley value from cooperative game theory. Introduces SHAP values as this unique attribution and gives model-agnostic (KernelSHAP) and model-specific approximations. The tree-specific fast exact algorithm (TreeSHAP), relevant to the production XGBoost model, is developed in the follow-up Lundberg et al. (2020), *Nature Machine Intelligence*.
+
+**Key concept / formula**
+Additive feature-attribution explanation model:
+$$g(z') = \phi_0 + \sum_{i=1}^{M} \phi_i z'_i$$
+where the SHAP value for feature $i$ is the Shapley value
+$$\phi_i = \sum_{S \subseteq F \setminus \{i\}} \frac{|S|!\,(|F| - |S| - 1)!}{|F|!}\,\big[f_x(S \cup \{i\}) - f_x(S)\big].$$
+**Consistency** guarantees that if a model changes so that a feature's marginal contribution increases in every coalition, its SHAP value cannot decrease — the property that licenses cross-version comparison in SHAP-DiD.
+
+**How to apply at Insurance Company.**
+In Build 04 (`04_02`), decompose each model version's score into per-feature SHAP contributions, then track how a feature's mean contribution shifts across versions (**v2a → v3a**, following the SHAP-DiD specification) as the DiD outcome — testing whether the SFP loop concentrates the model's reliance onto particular features. Two caveats to state: (a) the production scores are **uncalibrated**, so SHAP contributions are attributions on the raw score scale, not on a probability; (b) the real v2 top feature is `location_Home` (from actual feature importance, not SHAP), and versions differ in feature *set*, so a like-for-like SHAP-DiD comparison must restrict to the common feature set.
+
+**What to write in the dissertation**
+Cite as the methodological source for every SHAP result. State: "Feature attributions are computed with SHAP (Lundberg & Lee, 2017), the unique additive attribution satisfying local accuracy and consistency; the consistency property is what permits comparing a feature's attribution across model versions in the SHAP-DiD probe. For the gradient-boosted production model we use the exact tree estimator of Lundberg et al. (2020)." Flag the parallel-trends assumption of the DiD layer as the limitation to defend, not model autonomy.
+
+---
+
+### P40 · Lundberg et al. (2020) — From Local Explanations to Global Understanding with Explainable AI for Trees (TreeSHAP)
+
+**Citation**
+Lundberg, S. M., Erion, G., Chen, H., DeGrave, A., Prutkin, J. M., Nair, B., Katz, R., Himmelfarb, J., Bansal, N. & Lee, S.-I. (2020). "From Local Explanations to Global Understanding with Explainable AI for Trees." *Nature Machine Intelligence*, 2(1), 56–67.
+
+**Link** → https://doi.org/10.1038/s42256-019-0138-9 | arXiv: https://arxiv.org/abs/1905.04610
+**Citations** ≈ 10,000+ (Google Scholar, 2026) · **Journal** *Nature Machine Intelligence* (IF ≈ 18) — **the TreeSHAP paper; the exact estimator used on the production XGBoost model**
+
+**Why this paper matters**
+This is the paper that makes SHAP **usable on the actual FTTL model**. The general SHAP formulation (P39) requires summing over all feature coalitions — exponential in the number of features, hence intractable to compute exactly for a real model. This paper gives **TreeSHAP**: a polynomial-time algorithm that computes *exact* SHAP values for tree ensembles (XGBoost, LightGBM, random forests). Every SHAP number produced in notebook `04_02` comes from this algorithm, not from the KernelSHAP approximation. It also supplies the two things the SHAP-DiD probe actually consumes: (1) **global** feature importance built up consistently from per-row local attributions, and (2) **SHAP interaction values**, which let the analysis check whether a version's reliance shift is a main effect or a feature-interaction effect.
+
+**Summary**
+Introduces an algorithm to compute exact Shapley values for trees in $O(TLD^2)$ time (T trees, L leaves, D depth) instead of the exponential general case. Shows that summarising many local explanations yields faithful **global** model understanding — global feature importance, dependence plots, interaction effects, and clustering of explanations — while retaining the local-accuracy and consistency guarantees of P39. Demonstrates the approach on medical-risk models, including a finding that consistent local attributions correct the known inconsistencies of standard tree feature-importance measures (gain, split count).
+
+**Key concept / formula**
+Exact tree Shapley values in polynomial time; global importance is the mean absolute SHAP value per feature,
+$$I_j = \frac{1}{n} \sum_{i=1}^{n} \big| \phi_j^{(i)} \big|,$$
+and **SHAP interaction values** $\phi_{i,j}$ decompose a prediction into main effects plus pairwise interactions (a Shapley-interaction extension of the P39 additive model). Crucially, the paper shows classical tree importances (gain/split-count) are **inconsistent** — a feature's importance can *fall* when the model is changed to rely on it more — which is exactly the failure mode that would invalidate cross-version comparison; TreeSHAP does not have it.
+
+**How to apply at Insurance Company.**
+This is the estimator behind Build 04 (`04_02`). Compute exact TreeSHAP values on each version's XGBoost model, then (a) build the global importance ranking $I_j$ to identify which features the model relies on (real v2 top feature: `location_Home`), and (b) feed per-feature SHAP contributions into the **v2a → v3a** SHAP-DiD design. Use SHAP **interaction values** to test whether an SFP-driven reliance shift concentrates on a single feature or on a feature pair. Cite this paper — not P39 alone — whenever a SHAP number is reported, because the exactness and consistency guarantees for *trees* specifically are what license the cross-version DiD comparison. Same two caveats carry over: uncalibrated raw-score scale, and restrict SHAP-DiD to the common feature set across versions.
+
+**What to write in the dissertation**
+Cite as the source of the actual attribution algorithm. State: "SHAP values for the gradient-boosted production models are computed exactly with the polynomial-time tree estimator of Lundberg et al. (2020). This paper also establishes that classical tree feature-importance measures (gain, split count) are inconsistent, whereas TreeSHAP is not — the property on which the validity of the cross-version SHAP-DiD comparison rests. Global importance is reported as the mean absolute SHAP value per feature, and SHAP interaction values are used to distinguish main-effect from interaction-driven reliance shifts."
+
+---
+
+## Part 11 — Concentration & Diversity Measures for Feature Importance (borrowed foundations)
+
+> These four papers are **not about SFP**. They are the measurement foundation for the *concentration
+> scalar* in the SHAP-DiD probe (notebook `04_02`). Once SHAP gives an importance-**share** vector
+> `s` over features, one number must answer *"has importance piled onto a few features?"*. That number
+> — the **Simpson index** `D = Σ sⱼ²` (headline), with **Shannon entropy** and **Gini** as audits —
+> is borrowed from **ecology (diversity)** and **economics / information theory (concentration)**, the
+> fields that rigorously solved *"how concentrated is a share vector?"*. **Rationale for reaching
+> outside XAI:** the SHAP literature has no axiomatic theory of importance concentration (P41 is the
+> only XAI-native source and is the weakest — a workshop note with no formula); the *legitimacy*
+> criterion (which measures are even valid → Pigou–Dalton / Schur-convexity, still to be catalogued)
+> lives in welfare economics, and the *unification* (why entropy and Simpson are one family) lives in
+> ecology. The axioms transfer because all they require is a probability/share vector — no economic
+> assumption (cardinal utility, interpersonal comparison) is imported. See the provenance note in
+> `04_02` cell `md09`. **In the dissertation** the Simpson index is formally specified in
+> `paper.mid.draft.md` §2.7 (definition, sample-size floor $1/n$, normalised $\text{Simpson}^\ast$ and
+> the inverse-Simpson / $\exp H$ numbers-equivalents) and consumed by the SHAP-DiD statistic in §3.4.1.
+
+---
+
+### P41 · Saadallah (2025) — SHAP-Guided Regularization in Machine Learning Models
+
+**Citation**
+Saadallah, A. (2025). "SHAP-Guided Regularization in Machine Learning Models." *Late-breaking work, 3rd World Conference on eXplainable Artificial Intelligence (XAI 2025)*, Istanbul, 9–11 July 2025. Lamarr Institute for ML and AI, Dortmund. (Proceedings forthcoming.)
+
+**Link** → local PDF `literatures/p41_SHAP_feature_concentration.pdf` (no stable DOI yet; XAI 2025 late-breaking track)
+**Citations** ≈ negligible (2025 late-breaking) · **Venue** *XAI 2025* late-breaking / doctoral consortium — **weak anchor: workshop note, not peer-reviewed proceedings**
+
+**Why this paper matters**
+The only source from the **XAI literature itself** that names *importance concentration* as a SHAP diagnostic — it proposes a **SHAP entropy penalty** (sparsify attributions during training) and reports **Top-k Concentration** as an interpretability metric. The notebook's top-k audit statistic (`04_02`, cell `cd28b`) traces to it. It is cited as **precedent, not foundation**: it gives no formula for Top-k, k is an arbitrary cutoff, and the statistic is non-smooth — which is exactly why `04_02` demotes top-k to an audit and takes the Simpson index (P42) as headline.
+
+**Summary**
+Adds two SHAP-based regularisation terms to a LightGBM objective — an **entropy penalty** `L_entropy = −(1/N) Σ_i Σ_j p̂_ij log p̂_ij` (encourages sparse, concentrated attributions) and a **stability penalty** (consistent attributions across similar samples). Evaluates on 10 benchmark datasets, reporting RMSE/F1/AUC alongside SHAP Entropy, Top-k Concentration and Stability.
+
+**Key concept / formula**
+SHAP entropy penalty as above; **Top-k Concentration** = mass held by the k largest importance shares (no explicit formula given in the paper).
+
+**How to apply at Insurance Company.**
+Cite as the precedent that "importance concentration" is an established SHAP diagnostic. In `04_02` the top-k statistic is **re-implemented with an explicit normalisation the paper does not provide**, `(C_k − k/n)/(1 − k/n)` (floor is `k/n`, not `1/n`), and swept over k = 1..8 as a robustness audit only.
+
+**What to write in the dissertation**
+"Top-k concentration has been used as a SHAP interpretability metric (Saadallah 2025); we adopt it only as a k-robustness audit and take the Simpson index as the headline, because k is an arbitrary cutoff and top-k is non-smooth (flat to reallocations within the top-k set or within the tail)."
+
+---
+
+### P42 · Simpson (1949) — Measurement of Diversity
+
+**Citation**
+Simpson, E. H. (1949). "Measurement of Diversity." *Nature*, 163, 688.
+
+**Link** → https://doi.org/10.1038/163688a0 | free reprint: https://people.wku.edu/charles.smith/biogeog/SIMP1949.htm
+**Citations** ≈ 20,000+ (Google Scholar) · **Journal** *Nature* — **the source of `Σ pᵢ²` as a concentration index on a share vector**
+
+**Why this paper matters**
+The origin of `D = Σ pᵢ²` as a concentration / diversity index — the headline scalar in `04_02`. Gives the "why square?" answer: `D` is a **collision probability**, not squaring-for-emphasis.
+
+**Summary**
+Defines a measure of concentration for a population classified into groups: the probability that two individuals drawn at random belong to the *same* group. High `D` = concentrated (one group dominates); low `D` = diverse.
+
+**Key concept / formula**
+`D = Σ_j p_j²` = P(two independent draws hit the same class); range `[1/n, 1]`; **`1/D` = effective number of classes** (the "numbers equivalent").
+
+**How to apply at Insurance Company.**
+`D` is the headline concentration scalar `simpson` in `scalars()` (`04_02`, `cd10`); the SHAP-DiD footprint is computed on it. Its dual `inv_simpson = 1/D` is reported as the effective number of features.
+
+**What to write in the dissertation**
+"Importance concentration is summarised by the Simpson index `D = Σ sⱼ²` (Simpson 1949) — the probability that two importance draws land on the same feature — whose inverse `1/D` is the effective number of features."
+
+---
+
+### P43 · Hill (1973) — Diversity and Evenness: A Unifying Notation
+
+**Citation**
+Hill, M. O. (1973). "Diversity and Evenness: A Unifying Notation and Its Consequences." *Ecology*, 54(2), 427–432.
+
+**Link** → https://doi.org/10.2307/1934352 | free PDF: https://biocomparison.ucoz.ru/_ld/0/78_hill_obzor.pdf
+**Citations** ≈ 6,000+ (Google Scholar) · **Journal** *Ecology* (ESA flagship) — **the paper that unifies Simpson, Shannon and richness as one Rényi/Hill family**
+
+**Why this paper matters**
+This is what **licenses the claim that Shannon entropy and the Simpson index are two points of a single family**, not an arbitrary grab-bag. Hill relates Simpson (order q=2), Shannon (q=1) and species richness (q=0) to Rényi's generalized entropy, giving each an **effective-number** form indexed by an *order q* that dials how much weight the dominant classes receive.
+
+**Summary**
+Introduces the **Hill numbers** `ᴺq = (Σ_j p_j^q)^{1/(1−q)}` — a continuum of "effective number of species" measures. q=0 counts nonzero classes; q=1 → exp(Shannon); q=2 → 1/Simpson. Larger q weights common classes more.
+
+**Key concept / formula**
+`ᴺq = (Σ_j p_j^q)^{1/(1−q)}`; the order `q` is a sensitivity dial (q→∞ is governed by the single largest share; q→0 ignores magnitudes).
+
+**How to apply at Insurance Company.**
+Justifies reporting **entropy (q=1) and Simpson (q=2) together** in `04_02`; `eff_features = exp(H)` and `inv_simpson = 1/D` are the Hill effective numbers at q=1 and q=2. Top-k is *not* a member of this family (it is an order-statistic sum), which is a further reason it is audit-only.
+
+**What to write in the dissertation**
+"Shannon entropy and the Simpson index are the q=1 and q=2 members of the Hill/Rényi family of concentration measures (Hill 1973); each is reported with its effective-number dual, `exp(H)` and `1/D`."
+
+---
+
+### P44 · Jost (2006) — Entropy and Diversity
+
+**Citation**
+Jost, L. (2006). "Entropy and diversity." *Oikos*, 113(2), 363–375.
+
+**Link** → https://doi.org/10.1111/j.2006.0030-1299.14714.x
+**Citations** ≈ 4,000+ (Google Scholar) · **Journal** *Oikos* — **the modern standard on why to report effective numbers, not raw entropies**
+
+**Why this paper matters**
+Clarifies the distinction the notebook relies on: **entropies (Shannon `H`, Simpson `D`) are not themselves on a ratio scale** — their **numbers-equivalents** (`exp(H)`, `1/D`) are. This is why `04_02` reports `eff_features` and `inv_simpson` as the human-readable outputs rather than the raw indices.
+
+**Summary**
+Shows that raw diversity indices behave non-intuitively (doubling "true" diversity does not double `H`), whereas their numbers-equivalents (the Hill numbers of P43) do. Recommends converting any entropy to its effective number before interpretation or comparison.
+
+**Key concept / formula**
+"True diversity" = `exp(Shannon)` or `1/Simpson` (numbers equivalents); the raw entropy is only a transform of it, not a diversity itself.
+
+**How to apply at Insurance Company.**
+Motivates reporting `eff_features = exp(H)` and `inv_simpson = 1/D` alongside the raw scalars in `04_02`, and interpreting concentration shifts on the effective-number scale.
+
+**What to write in the dissertation**
+"Following Jost (2006), effective numbers of features (`exp(H)`, `1/D`) are reported alongside the raw indices, since entropies are not themselves on a ratio scale and only their numbers-equivalents are directly comparable."
+
+---
+
 ## Paper Role Classification
 
 > A paper can belong to multiple categories. See the **Paper Category Framework** section at the top for category definitions.
@@ -1141,6 +1321,8 @@ Cite in the problem-framing and related-work sections as the applied precedent. 
 | P33 | Performative Prediction in a Stateful World | ✓ | ✓ | | Convergence conditions require estimating state sensitivity ε_s from multi-generation logs (needs v1→v2→v3 data); no debiasing or correction method |
 | P34 | Data Feedback Loops (Taori & Hashimoto) | ✓ | ✓ | | Empirical, model-agnostic bias-amplification result; gives a faithfulness diagnostic but no debiasing algorithm — quantifies amplification, does not remove it |
 | P35 | Error Amplification When Updating Deployed Models (Adam et al.) | ✓ | ✓ | | Applied precedent (clinical); demonstrates the failure mode in a real non-convex system but supplies no total-loss-specific correction |
+| P39 | A Unified Approach to Interpreting Model Predictions — SHAP (Lundberg & Lee) | | ✓ | | Attribution tool, not a loop theory or correction; explains *what* the model relies on, not *why* the loop forms or how to break it. SHAP-DiD inherits the DiD parallel-trends assumption; scores are uncalibrated so contributions are on the raw-score scale |
+| P40 | Explainable AI for Trees — TreeSHAP (Lundberg et al.) | | ✓ | | Exact tree estimator that makes SHAP tractable on the XGBoost model, but still attribution only — no loop correction. Consistency fixes the cross-version comparison; same uncalibrated-score / common-feature-set caveats as P39 |
 
 ---
 
@@ -1198,6 +1380,8 @@ Cite in the problem-framing and related-work sections as the applied precedent. 
 | P33 | Brown et al. | 2022 | Performative Prediction in a Stateful World | Define + Detect | AISTATS | arxiv.org/abs/2011.03885 | 90 |
 | P34 | Taori & Hashimoto | 2023 | Data Feedback Loops (bias amplification) | Define + Detect | ICML | arxiv.org/abs/2209.03942 | 60 |
 | P35 | Adam et al. | 2022 | Error Amplification When Updating Deployed Models | Define + Detect | CHIL | (PMLR; MLHC'20 arxiv.org/abs/1909.03095) | 40 |
+| P39 | Lundberg & Lee | 2017 | A Unified Approach to Interpreting Model Predictions (SHAP) | Detect | NeurIPS | arxiv.org/abs/1705.07874 | 30,000 |
+| P40 | Lundberg et al. | 2020 | Explainable AI for Trees (TreeSHAP) | Detect | Nature Mach. Intell. | doi:10.1038/s42256-019-0138-9 | 10,000 |
 
 ---
 
@@ -1257,10 +1441,10 @@ mechanism (01), **estimate** clean effects despite the bias (02, 04), or **break
 | **00 Audit** | `repair_decision` mix; scrap rate by score band; outcome observability mask (`decision==0`); enrichment join integrity | P17 (feedback as tech debt), P9 | Diagnostic is **scrap-rate monotonicity in score**, not investigation-rate; the "selection" is the irreversible scrap, recorded in `repair_decision` |
 | **01 Simulation** | Re-run the v1→v2 loop on synthetic data; show scrap rate inflates (19%→21.5%) while true feasibility is fixed | P12 (Pólya urn), P15 (performative risk), P14 (long-run) | Urn "ball" = a scrapped car forcing label=1; the fixed point is **over-scrapping**, not over-patrolling. Because the cutoff is absolute, drift shows up as *more* scrapping (not a held-constant rate) |
 | **02 Detection** | 4 falsifiable tests (below) on `model_v1_*` vs `model_v2a_*` | P15, P12, P4, P16, P27 | Step 2 becomes the **tautology check** `P(observed=1\|decision=1)=1.0`; Step 3 treats *scrapping* as the treatment |
-| **03 Unbiased eval** | Selective-labels-corrected AUC on the **garage-only** subset, reweighted to the full population; PU class-prior `π̂` for scrapped cars | P27, P3 (IPS), P6, P28 (PU), P18 | Evaluate on `decision==0` rows (true labels) and reweight by inverse P(garage); **also correct the OOT set** (it is inside the v1 log → contaminated) |
-| **04 Intervention** | Causal effect of *scrapping* on the forced-positive label; RDD at the **per-version cutoff τ_v** (v2 = 0.872); PSM/DML on propensity-to-scrap | P7, P8 (RDD/DiD), P4, P16, P5 (DAG) | The absolute cutoff τ_v (precision-tuned; 0.872 for v2) is a **textbook sharp RDD** — near-identical cars just above/below it. This is the cleanest natural experiment in the whole project |
-| **05 Randomisation** | Policy that sends a budgeted fraction of high-score cars to the garage to recover oracle labels; regret vs cost | P19/P21 (Thompson), P20/P26 (UCB), P13 (cost of fairness), P14 | Exploration is **expensive and risky** (garage fee + possibly paying a true total loss's full value) — cost-benefit must be modelled explicitly, unlike cheap re-investigation |
-| **06 Mitigation** | Debias next-gen training data: downweight/relabel forced positives; IPW for garage rows; PU-imputed counterfactuals for scrapped rows | P3, P4, P16, P5, P27, P28 | Don't just reweight — the forced `outcome=1` on scrapped rows is *wrong*, so PU relabelling/`π̂`-correction matters as much as IPW |
+| **02-02 Unbiased eval** | Selective-labels-corrected AUC on the **garage-only** subset, reweighted to the full population; PU class-prior `π̂` for scrapped cars | P27, P3 (IPS), P6, P28 (PU), P18 | Evaluate on `decision==0` rows (true labels) and reweight by inverse P(garage); **also correct the OOT set** (it is inside the v1 log → contaminated) |
+| **02-03 Intervention** | Causal effect of *scrapping* on the forced-positive label; RDD at the **per-version cutoff τ_v** (v2 = 0.872); PSM/DML on propensity-to-scrap | P7, P8 (RDD/DiD), P4, P16, P5 (DAG) | The absolute cutoff τ_v (precision-tuned; 0.872 for v2) is a **textbook sharp RDD** — near-identical cars just above/below it. This is the cleanest natural experiment in the whole project |
+| **02-04 Randomisation** | Policy that sends a budgeted fraction of high-score cars to the garage to recover oracle labels; regret vs cost | P19/P21 (Thompson), P20/P26 (UCB), P13 (cost of fairness), P14 | Exploration is **expensive and risky** (garage fee + possibly paying a true total loss's full value) — cost-benefit must be modelled explicitly, unlike cheap re-investigation |
+| **03 Mitigation** | Debias next-gen training data: downweight/relabel forced positives; IPW for garage rows; PU-imputed counterfactuals for scrapped rows | P3, P4, P16, P5, P27, P28 | Don't just reweight — the forced `outcome=1` on scrapped rows is *wrong*, so PU relabelling/`π̂`-correction matters as much as IPW |
 | **Ethics/Reg** | Disparate-impact check by `vehicle_make`/`damage_profile`; AI Act Art. 10 data-governance argument | P10, P22, P23, P24, P25 | "Protected segment" proxy is vehicle/damage profile, not postcode; the harm is **systematically over-scrapping** certain makes |
 
 ## 2. The detection logic (Build 02), restated for total loss

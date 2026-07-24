@@ -1,4 +1,4 @@
-# Problem Definition — Fast Track Total Loss SFP Loop
+# Problem Definition — Machine Learning Self-Fulfilling Prophecy Loop
 
 > This document is the **central reference** consulted when reading each paper. When writing a paper note (`literatures/notes/pXX.md`), answer the following questions:
 > 1. Which component of §2 (Problem Formalisation) does this paper address?
