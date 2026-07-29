@@ -48,7 +48,11 @@ repo/
     │   ├── attribute.py       # [plan] model + features → detection/<v>_attributions  (per-row |φ|;
     │   │                      #   the sibling of predict.py — SHAP must run where the pkl unpickles)
     │   ├── score_all.sh
-    │   └── load_scores.py
+    │   ├── load_scores.py
+    │   └── inspect_pickle.py  # [now] standalone real-data onboarding util (Windows-portable): loads a
+    │                          #   prod pickle (e.g. Z:/…/Prod-Predictions/inputs.pkl), reports schema +
+    │                          #   date range (→ find v1's unknown last date / tell v1 vs v2 by year).
+    │                          #   Prints hints for the numpy>=2 / model-pickle dependency traps.
     ├── preprocessing/
     │   ├── base.py
     │   └── v1.py · v2.py · v3.py
