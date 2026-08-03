@@ -85,11 +85,17 @@ The model's goal was never to reproduce handler judgment — **v1 was built to *
 - **No calibration**: XGBoost outputs raw probability-like scores but they are not calibrated. Since the model is used purely for ranking/triaging claims (not for making expected-value decisions), well-calibrated probabilities are not required and the calibration step is omitted to keep the pipeline simple. Note: if scores are used as propensity weights (e.g. for IPS correction), poor calibration can distort debiasing — this is a known limitation flagged in the SFP mitigation analysis.
 - **Decision threshold**: the scrapping policy applies an **absolute score cutoff** — a car is fast-tracked to scrap only when `model_score ≥ threshold`. This is **not** a percentile/top-N rule. Because the cutoff is fixed in score space, the *scrap rate* is free to move with the score distribution — which is precisely how score drift in a later model version becomes observable as a higher scrap rate (the headline SFP signal). See `src/data/synthetic/generate/model.py` (`SCRAP_THRESHOLD`).
 
-  > **Threshold is per-model, not a universal constant.** What is invariant across model versions is the **business constraint (precision ≥ 0.985)** and the **policy *form*** (an absolute score cutoff, not a percentile). The actual cutoff *value* differs by version: each model's score distribution is different, so a **different** absolute threshold is required to hold the same ≥ 0.985 precision target. **`0.872` is specifically v2's tuned threshold** (the real Insurance Company. value used by the synthetic generator). **v1 and v3 were tuned to different threshold values** (exact figures not confirmed), each calibrated on validation to keep precision ≥ 0.985. So "the threshold" should always be read as "the precision-≥-0.985 cutoff *for that model version*", and `0.872` is the v2 instance of it.
+  > **Threshold is per-model, not a universal constant.** What is invariant across model versions is the **business constraint (precision ≥ 0.985)** and the fact that the cutoff lives in **score space (an absolute cutoff, never a percentile)**. The actual cutoff *value* differs by version: each model's score distribution is different, so a **different** absolute threshold is required to hold the same ≥ 0.985 precision target. **`0.872` is specifically v2's tuned threshold** (the real Insurance Company. value used by the synthetic generator) — and only until **2026-06-30 14:30 UK time**, when v2 moved to **0.825**. **v1 and v3 were tuned to different threshold values**, each calibrated on validation to keep precision ≥ 0.985. So "the threshold" should always be read as "the precision-≥-0.985 cutoff *for that model version, in that period*".
   >
-  > **Operational note — threshold change history (v2):** v2's threshold was briefly changed away from 0.872 at some point during production (exact value and dates not confirmed). Performance degraded and the threshold was promptly reverted to 0.872. **For the purposes of this research and the dataset, v2's threshold is treated as constant at 0.872 throughout the production period.** The brief deviation is not modelled separately and is not reflected in the decision columns in the production log. This simplification is consistent with Allianz's operational understanding of the dataset.
+  > **⚠️ The policy *form* is NOT invariant** (confirmed 2026-07-29). v1 applies **two** cutoffs segmented by vehicle mobility (0.75 immobile / 0.85 mobile); v2 applies **one** global cutoff. Only the *absolute-cutoff-in-score-space* property is shared — the **arity** of the cutoff differs by version. See § "Model v1", § "Model v2" and § "Model v3". ✅ **v3 is also a single global cutoff** (confirmed 2026-07-29), so **v1 alone is segmented.**
   >
-  > **⚠️ Researcher concern (2026-06-25):** The advice to ignore this deviation is *operational*, not verified. If the brief threshold change overlapped a retraining data window, then the decisions and forced labels generated during that window were produced under a *different* cutoff — injecting a small, undocumented inconsistency into exactly the label data the SFP analysis depends on. "Treat the threshold as constant at 0.872" is therefore adopted as a **working assumption whose safety is not confirmed**, and is logged here as an open risk to revisit when the real decision logs become available.
+  > **Operational note — threshold change history (v2)** *(superseded 2026-07-29 — see below)*: the earlier account was that v2's threshold was briefly changed away from 0.872 at some point during production (exact value and dates not confirmed), that performance degraded, and that it was **promptly reverted** to 0.872 — so v2's threshold could be treated as constant at 0.872 throughout.
+  >
+  > **✅ Update (2026-07-29, read directly from v2 `score.py`):** the threshold is **currently `0.825`**, changed from `0.872` and **still in force** — it was *not* reverted. ✅ **Exact break confirmed 2026-07-31: 2026-06-30 14:30 UK local (BST) = 13:30 UTC** (the earlier "≈ four weeks ago / ≈ 2026-07-01" estimate is superseded). **v2's threshold is therefore NOT constant over the production period**; it is piecewise-constant with one documented break. See § "Model v2 — Actual Scoring & Decision Rule" for the full specification and consequences.
+  >
+  > **⚠️ Unreconciled — one change or two?** An earlier change is confirmed (`0.825 → 0.872` at 2026-02-25 16:26 UK), so there are **at least two**. What cannot be settled is how far back the 0.825 era before it ran: **the deployment/change record is broken before that point and is not recoverable.** The "briefly changed, promptly reverted" account is consistent with 2026-02-25 being the *revert*, which would make the "brief" episode the one of unknown, possibly long duration — the opposite of how it was recorded. Carried as a limitation, not resolved: see § "Limitation — the threshold change record is incomplete before 2026-02-25".
+  >
+  > **✅ Partially resolves the researcher concern (2026-06-25).** The original worry was that a threshold change might have overlapped a *retraining data window*, contaminating the label data with decisions made under a different cutoff. For **v3 this is now confirmed not to have happened**: v3's training logs come **entirely from the τ = 0.872 era** (confirmed 2026-07-29). The concern is closed for v3, but remains live for (i) any analysis run on the **current** v2 production log, which now spans both regimes, and (ii) any **future** retrain, whose window would straddle the break.
 
 ```
 Full data timeline
@@ -118,6 +124,840 @@ Full dataset
 ```
 
 
+# Model v1 — Actual Data Split & Target Specification (real, confirmed 2026-07-28)
+
+> The methodology section above describes the **generic/idealised** training scheme (maturation buffer + single 6-month OOT). The block below is the **actual v1 split as implemented at Insurance Company.**, transcribed from the real training code. Where the two differ, this section is authoritative *for v1*. The key real-world differences: v1 uses **explicit `lossdate` cut-off dates** (not a rolling "last N months" rule), the **Test set is an in-period random split — not an OOT holdout**, and there are **two** date-bounded validation sets rather than one OOT block.
+
+## Source extract & cleaning
+
+```sql
+SELECT * FROM uc005.cc_fttl_train_v8 WHERE lossdate >= '2016-01-01'
+```
+
+- **Original dataset shape:** `(311591, 198)` — 311,591 claims × 198 raw columns.
+- **No corrupted-row drop applies to v1.** The four splits sum to the **full 311,591** (178,435 + 44,609 + 36,049 + 52,498), i.e. no row is removed before splitting. *(The `ReportedDate = 2020-08-24` corrupted-record exclusion is a **v2** cleaning detail, not v1 — see the Cross-Version Dataset Summary.)*
+- **Model-ready column count:** **39 columns** (after preprocessing/selection from the 198 raw columns). ⚠️ This **39 includes the `target` column and the claim-number (ID) column**, which are *not* predictive inputs — so the actual model **input feature count is 37** (39 − target − claim number). Read "39" as the width of the model-ready table, not the number of features the model learns from.
+
+## Training-set exclusion — centre-flagged FTTL claims (`cc_fttl`)
+
+**A key characteristic of v1's training data:** claims flagged by the claims centre as FTTL (`cc_fttl`) are **removed from the training set**. v1 is trained on the *remaining* claims only.
+
+**`cc_fttl` is a rule-based flag — not discretionary handler judgment.** It is computed at First Notification of Loss (FNOL) from four "obvious total loss" physical indicators, OR'd together:
+
+```python
+# Source comments (verbatim from the real training code):
+#   "adding claim centre fttl flag"
+#   "find claims flagged by centre as fttl: we are removing those from the training set"
+def claimCentreIndicators(df):
+    cc_fttl = np.where(
+        (df['FNOLRECOVERYAGENTTOTALLOSS_EXT'] == True) |   # recovery agent called it a total loss
+        (df['FNOLEXTRICATION'] == True) |                  # occupant had to be cut/extricated from the vehicle
+        (df['vehiclerollover'] == 1) |                     # vehicle rolled over / flipped
+        (df['FNOLWATERDEPTHTYPE_EXT'].isin(['Into Cabin (above seat base)'])),  # flood water above seat base
+        1, 0
+    )
+    return cc_fttl   # numpy ndarray, shape (len(df),), values 0/1 — NOT a pandas Series (no index)
+```
+
+The intent is stated directly in the code comments: the flag is *added* ("adding claim centre fttl flag") and then used purely as an **exclusion filter** ("find claims flagged by centre as fttl: we are removing those from the training set"). So `cc_fttl` never enters v1 as a *feature* — it exists only to drop those rows before training.
+
+- **What it captures:** the **"predefined rules" component of the pre-ML era** (e.g. *"car flips over → automatic total loss"*) made concrete. Any one of {recovery-agent total-loss call, extrication, rollover, water into cabin} → `cc_fttl = 1`. These are unambiguous, physically-evident write-offs identified at intake — *not* a handler's subjective severity call.
+- **Return value:** `np.where(cond, 1, 0)` returns a **numpy `ndarray`** of 0/1 (length = number of rows), **not** a Series and **not** a slice of `df`. It has no index and aligns to `df` positionally.
+- **Why removed (rationale):** a `cc_fttl` flag is a **rule-forced label with no garage verification**. Training on it would teach the model to *reproduce the intake rule* rather than learn to discriminate — the human-based SFP loop v1 is meant to beat (cf. "v1 was built to *outperform* the call handler", § "Why there is no ground truth"). Excluding them keeps the model from simply re-learning the obvious-total-loss rules.
+- **⚠️ Two-edged consequence (selective-labels bias).** These rule-flagged claims are exactly the **obvious total losses**. Removing them means v1 trains on a **truncated distribution** with the clear-cut write-offs excluded — yet in production it must still score exactly those cases. This is a **train/serve distribution mismatch** and a concrete instance of the selective-labels problem (P27): training distribution ≠ application distribution. So the exclusion *reduces rule-forced contamination in training* but *introduces a training-set selection bias* — it is not unambiguously "cleaner".
+
+**Impact on dataset size — applied to ALL splits, not just training.** Although the code comment says "removing those from the *training* set", the row counts show the exclusion hits **every** split (Test and both validation sets shrink too) — i.e. `cc_fttl` is filtered from the whole modelling population, not just the training rows:
+
+| Split | Before `cc_fttl` exclusion | After | Removed | % removed |
+|---|---:|---:|---:|---:|
+| Train | 178,435 | 173,758 | 4,677 | 2.62% |
+| Test | 44,609 | 43,471 | 1,138 | 2.55% |
+| Validation set 1 | 36,049 | 35,254 | 795 | 2.21% |
+| Validation set 2 | 52,498 | 51,189 | 1,309 | 2.49% |
+| **Total** | **311,591** | **303,672** | **7,919** | **2.54%** |
+
+Two consequences: **(i)** because **Test and Validation are also filtered**, the precision ≥ 0.985 target is measured on a population with the obvious total losses **already removed** — the reported metric excludes the easiest positives, so it is *not* a precision over all claims the model faces in production. **(ii)** the removal rate is concrete: **~2.54% of all rows** (7,919 of 311,591).
+
+> **Open items to reconcile (confirm against real data before treating as settled):**
+> 1. **How `cc_fttl` relates to the ~43% forced-label contamination** documented in the Pre-ML Baseline section (a figure **provided by the Allianz team**, defined as the % of *scrapped* cars handler-fast-tracked with no garage visit ≈ 6.45% of *all* pre-ML cars; to be reconciled with real logs). **The new size evidence points to subset, not equality:** `cc_fttl` removes only **~2.54% of all rows**, well below the ~6.45% forced-label rate — consistent with the rule-based flag (rollover/extrication/water/recovery-agent) catching only the *physically obvious* fraction of the broader handler-forced population, leaving the softer subjective-judgment forced labels still in the data. (Caveat: 6.45% is an early-era estimate and 2.54% is the real v1-window count — this is **directional evidence for `cc_fttl ⊆ forced-labels`, not a like-for-like proof**.) So v1's training set is **partly** de-contaminated, not fully: the "trained on contaminated `pre_ml_label`" narrative still stands but must be qualified with "minus the rule-obvious total losses".
+> 2. **Relationship to `veh_fast_track`** (the target-construction source): is `cc_fttl` the same signal, a subset, or independent? The target rule (`fast_track=1 & total_loss=0 → target=1`) applies to whatever rows *remain* after the `cc_fttl` exclusion — the interaction needs confirming.
+> 3. **Scope:** does this exclusion apply to **v1 only**, or also to v2/v3 training?
+
+## Date boundaries (all applied on `lossdate`)
+
+| Boundary | Value |
+|---|---|
+| `EndTrainDate` | **2017-04-01** |
+| `EndValidationDate` | **2017-06-30** |
+
+## The four splits
+
+| Split | Definition (on `lossdate`) | Size | How produced | OOT? |
+|---|---|---:|---|---|
+| **Train** | `lossdate < EndTrainDate` (2017-04-01), then 80% of that pool | **178,435** | `train_test_split(..., test_size=0.2, random_state=0)` | No |
+| **Test** | remaining 20% of the same `lossdate < EndTrainDate` pool | **44,609** | same `train_test_split` call (the held-out 20%) | **No — in-period random split** |
+| **Validation set 1** | `EndTrainDate ≤ lossdate < EndValidationDate` (2017-04-01 … 2017-06-30) | **36,049** | date filter | Yes (near-term, ~3 months) |
+| **Validation set 2** | `lossdate ≥ EndValidationDate` (≥ 2017-06-30) | **52,498** | date filter | Yes (longer horizon) |
+
+> The **Size** column shows the raw `lossdate`-split counts **before** the `cc_fttl` exclusion above is applied. The `cc_fttl` filter then removes ~2.5% from **every** split — post-exclusion counts: **Train 173,758 · Test 43,471 · Val1 35,254 · Val2 51,189** (total 311,591 → 303,672). See the "Training-set exclusion — centre-flagged FTTL claims" section above.
+
+**Test vs Val1 vs Val2 — the distinction that matters.**
+- **Test (44,609)** is carved out of the *training period itself* by a random `train_test_split`. It shares the train time window, so it is **not** an out-of-time set — it measures in-distribution performance only.
+- **Val1 / Val2** are **temporal holdouts** defined purely by `lossdate` cut-offs — data *later* than the training window. Val1 is the near-term future (~3 months after the train cut-off); Val2 is the longer horizon (from 2017-06-30 onward). These are what actually test generalisation to future claims (the role the generic "OOT" block plays).
+
+> **⚠️ The Test split is NOT stratified.** The call is
+> `train_test_split(train_test, train_test['target'], test_size=0.2, random_state=0)` — with **no `stratify=` argument**. Passing the label array as the second positional argument does **not** trigger stratification (a common misreading): scikit-learn only stratifies when `stratify=` is explicitly set. So v1's Train/Test split is a plain random split. Given the low positive rate (total-loss is the minority class), Train and Test can carry **slightly different class balances** — a real caveat under the tight precision ≥ 0.985 constraint, where the Test positive count directly drives the precision estimate's stability. `random_state=0` only fixes reproducibility (identical split on every re-run), not class balance. **This is v1-specific: v2 *does* pass `stratify=` explicitly** (see § "Model v2"), so the caveat does not carry across versions — and it is one more reason v1's and v2's in-period holdouts are not like-for-like.
+
+## v1 target construction — `veh_fast_track` + `veh_total_loss` → `target`
+
+v1's label is **not** a single raw column. It is derived from two raw fields and encodes the forced-label mechanism directly:
+
+```python
+df = data[[target_fttl, target_tl]].copy()          # target_fttl = veh_fast_track, target_tl = veh_total_loss
+df[target_fttl] = df[target_fttl].map(...)           # veh_fast_track: non-FTTL → 0, FTTL → 1
+df[target_tl]   = df[target_tl].map(...)             # veh_total_loss: non-TL → 0, TL → 1
+df['target']    = df[target_tl]                      # base target = the total-loss flag
+df.loc[(df[target_fttl] == 1) & (df[target_tl] == 0), 'target'] = 1   # fast-tracked but not TL → force to 1
+```
+
+Resulting truth table:
+
+| `veh_fast_track` | `veh_total_loss` | `target` | Interpretation |
+|:---:|:---:|:---:|---|
+| 0 | 0 | **0** | not fast-tracked, not total loss → repairable |
+| 0 | 1 | **1** | not fast-tracked, garage-confirmed total loss → genuine positive |
+| 1 | 0 | **1** ⚠️ | **fast-tracked but no total-loss label → forced to 1** |
+| 1 | 1 | **1** | fast-tracked and total loss → positive |
+
+So `target` = "**total loss, OR fast-tracked**". The third row is the **forced/contaminated positive** at the row level: a car sent down the fast-track path never reaches a garage, so `veh_total_loss` is never independently confirmed (it stays 0), yet the label construction assigns `target = 1`. This is the **selective-labelling / forced-label SFP mechanism (§2.2 of `problem.md`) made concrete in the real v1 label** — fast-track routing itself becomes a proxy positive.
+
+> **Open item — why `fast_track = 1 & total_loss = 0` occurs is not yet confirmed.** Plausible mechanisms: (a) the two fields come from different processes and a fast-tracked car skips the garage step that would set `veh_total_loss`; (b) label-maturation timing (the total-loss field not yet finalised at snapshot); (c) fast-track decisions later reversed but the flag persists. Which one dominates should be confirmed against the real data before the forced-label interpretation is stated as fully settled.
+
+
+## v1 model training call — real XGBoost configuration
+
+Reconstructed from the real v1 training code:
+
+```python
+seed_val = 10**9   # = 1,000,000,000 — XGBoost random seed (distinct from the split's random_state=0)
+
+eval_set  = [(X_test, y_test)]          # the held-out 20% Test split, passed as the eval set
+xgb_model = xgb.XGBClassifier(
+    eval_metric="mlogloss",             # multiclass log-loss
+    eval_set=eval_set,
+    silent=False,
+    n_jobs=20,
+    # seed_val wired in as the seed / random_state
+)
+xgb_model.fit(X_train, y_train)
+joblib.dump(xgb_model, ...)             # persist the fitted model artefact
+return xgb_model
+```
+
+Key points + things to verify:
+
+- **Two different seeds — don't conflate.** The Train/Test split uses `random_state=0`; the XGBoost model uses `seed_val = 10⁹`.
+- **`eval_metric="mlogloss"` on a confirmed binary target.** `target` is **binary 0/1** (confirmed), and "**m**logloss" is the *multiclass* log-loss — so this is `mlogloss` applied to a 2-class problem (config choice, not evidence of >2 classes). XGBoost then runs a `multi:softprob`-style objective with `num_class=2`, so **`predict_proba` returns 2 columns** and `model_v1_score` is column `[:, 1]` (the total-loss probability). (Had `binary:logistic`/`logloss` been used, `predict_proba` would still be 2 columns — the score extraction is the same; the note matters only so no one assumes a k-column output.)
+- **⚠️ `eval_set` is passed to the *constructor*, not to `.fit()`.** In the XGBoost sklearn API `eval_set` is normally a `.fit()` argument. Passed to the constructor it may be **stored but never actually used** — i.e. no real eval/early-stopping happens and the "Test as eval_set" monitoring silently no-ops. **Verify whether this eval_set takes effect.**
+- **`silent=False` is a deprecated parameter** (superseded by `verbosity`), confirming v1 was built on an **older XGBoost release** — consistent with the per-version frozen-environment constraint (§ "Model artefacts and reproduction"): reloading this `joblib.dump` artefact requires v1's exact pinned XGBoost.
+- **`joblib.dump(...)`** produces the serialised v1 artefact the analysis pipeline later reloads — the pickle that binds v1 to its exact library stack (the clone-&-run reproduction model).
+- **`n_jobs=20`** — 20 parallel threads at fit time (infra detail, no modelling effect).
+
+**v1 runtime environment (confirmed via `conda_dependencies_local.yml`): Python 3.5.2, pandas 0.22.0** (numpy pin not stated in the yml — 🔎 confirm). Two consequences:
+- Pins v1 to a **very old stack** (2016–2017 era), consistent with the deprecated `silent=` XGBoost arg above and the per-version environment-isolation constraint (§ "Model artefacts and reproduction").
+- **Even v1's *data* pickle is env-bound, not just its model pickle.** A DataFrame serialised by pandas 0.22.0 will very likely **not** unpickle under a modern pandas (2.x) — the internal BlockManager format changed across that gap — so v1's `inputs.pkl` (`…/Prod-Predictions/`) must be opened **inside v1's env**. The real-data onboarding util `src/scoring/inspect_pickle.py` is written **Python-3.5.2-compatible on purpose** for exactly this (used to recover v1's unknown last date — see the Cross-Version Dataset Summary).
+
+## v1 scrapping threshold — segmented by vehicle mobility (creates a score-space overlap band)
+
+**⚠️ v1's scrap decision is NOT a single absolute cutoff.** It is **segmented by vehicle mobility** — two different thresholds:
+
+```
+D = 1[ score > 0.75 ]   if the vehicle is IMMOBILE
+D = 1[ score > 0.85 ]   if the vehicle is MOBILE
+```
+
+where **MOBILE** = vehicle mobility status ∈ {`Mobile`, `Mobile Not Roadworthy`, `Mobile Not Secure`}, and **IMMOBILE** = the complement. The immobile (undrivable → typically more damaged) car is scrapped more readily (lower bar, 0.75); the mobile (drivable → benefit of the doubt) car needs a higher score (0.85) to be scrapped.
+
+> This means **`τ = 0.872` is not v1's rule** — 0.872 is v2's cutoff (and only until 2026-06-30 14:30 UK time; see § "Model v2 — Actual Scoring & Decision Rule"). v1's decision rule *form* is a **mobility-conditional (segmented) cutoff**, not one absolute threshold. The claim elsewhere that "the policy form (a single absolute cutoff) is invariant across versions" is therefore **false as stated**: v1 uses two cutoffs keyed on mobility, while **v2 is confirmed (2026-07-29) to use a single global cutoff with no segmentation**. The invariant is narrower — *an absolute cutoff in score space, never a percentile* — with the cutoff's **arity** differing by version. ✅ v3 is also a single global cutoff, so **v1 alone is segmented.**
+
+### Does this create positivity in the v1 FTTL system?
+
+**Short answer: partially — and importantly.** It does *not* restore strict positivity, but it opens a genuine **overlap band in score space** that the single-cutoff model said could not exist.
+
+**Three score regions now, not two:**
+
+| Score range | Immobile vehicle | Mobile vehicle | Oracle (garage outcome) observed? |
+|---|---|---|---|
+| `score < 0.75` | garage | garage | ✓ **both** groups garage-verified |
+| `0.75 < score < 0.85` | **scrap** | **garage** | ⚠️ **mixed** — mobile cars ARE garage-verified up here |
+| `score > 0.85` | scrap | scrap | ✗ neither — positivity dead |
+
+**What this means formally:**
+
+- **Conditional on the *full* feature vector (score + mobility): positivity still FAILS.** Given both the score and the mobility status, the decision is still a deterministic step function — the propensity `e(x) = P(D=1 | score, mobility)` is still 0 or 1. So the strict positivity violation (P4) is *not* dissolved.
+- **Conditional on the *score alone*: positivity HOLDS in the band `(0.75, 0.85]`.** There, `e(score) = P(D=1 | score) = P(immobile | score) ∈ (0, 1)` — because at the *same* score a mobile car is garaged and an immobile car is scrapped. Mobility is the variable that breaks the perfect collinearity between score and treatment in that region.
+- **Consequence for the data:** there ARE now **garage-verified outcomes above 0.75** (the mobile cars in the band). The blanket statement "**zero garage rows above `τ`**" is only true **above 0.85**; between 0.75 and 0.85 the oracle is partially observable via mobile vehicles.
+
+**Why this is genuinely good news for the framework (with one caveat):**
+
+- **Two-cutoff sharp RDD.** Each mobility group has its own sharp discontinuity (immobile at 0.75, mobile at 0.85), so the payout/outcome RDD can be run at **two** boundaries instead of one — more identification, not less.
+- **Overlap band anchors counterfactual/reweighting models.** The mitigation's counterfactual-outcome model (what a scrapped car's garage result would have been) now has *real observed outcomes for high-scoring vehicles* (mobile, 0.75–0.85) to learn from, instead of extrapolating blindly above a single cutoff.
+- **⚠️ Caveat — the overlap is confounded, not random.** Mobility is **not** independent of the true outcome: a `Mobile` car is drivable ⇒ physically less damaged ⇒ genuinely more likely repairable. So the mobile garage-verified cars in the band are a **systematically-more-repairable subgroup**. Using them directly to impute the counterfactual for immobile scrapped cars would **under-state** the immobile cars' true total-loss probability. The band gives *exploitable overlap*, but identification still needs a mobility adjustment — it is not clean random positivity.
+
+**Bottom line:** the segmented threshold moves the system from "positivity globally dead above one cutoff" to "positivity dead only above 0.85, with a confounded-but-usable overlap band in 0.75–0.85." That is a materially better starting point for RDD and for the mitigation counterfactual — provided the mobility confound is handled explicitly.
+
+> **Open items:** (1) confirm the exact `IMMOBILE` category set (complement of the three mobile statuses — list the actual values). (2) ~~Confirm whether v2/v3 also use a segmented mobility threshold or the single 0.872.~~ **✅ Resolved for v2 (2026-07-29): v2 is a single global cutoff with no mobility segmentation** — see § "Model v2". ✅ **Also resolved for v3 (2026-07-29): single global cutoff at 0.984.** So **v1 alone is segmented.** (3) This finding **qualifies the P4 "positivity dead" property** and the "zero garage rows above τ" assumption used in the mitigation/evaluation design — propagate to the dissertation (§2.4 P4, §3.6) and revisit the IPS-positivity caveat.
+
+
+# Model v2 — Actual Split, Scoring & Decision Rule (real, confirmed 2026-07-29)
+
+> **Scope of this section.** Read directly from v2's production **`train.py`** (split scheme, cleaning, data window) and **`score.py`** (decision rule). Still **🔎 TBD** for v2: target construction, the training call / XGBoost config, runtime environment, feature set, and whether v1's `cc_fttl` exclusion applies. Where this section and the generic methodology differ, this section is authoritative *for v2*.
+
+## Split scheme & data window (from v2 `train.py`)
+
+```python
+dataset = dataset.sort_values('ReportedDate')
+dataset = dataset[dataset['ReportedDate'] != '2020-08-24']      # corrupted — dropped
+dataset = dataset[dataset['ReportedDate'] >  cutoff_date]       # cutoff_date = 2018-01-01
+
+out_of_time_data = dataset.tail(math.floor(0.2 * len(dataset)))
+out_of_time_data = out_of_time_data[out_of_time_data['ReportedDate'] > '2019-12-01']
+
+train_test = dataset.head(math.floor(0.8 * len(dataset)))
+# train_test_split(train_test, ...) → 0.8 = TRAIN, 0.2 = VALIDATION
+# out_of_time_data                  → TEST
+# all three stored as key/value entries in a dict
+```
+
+### ⚠️ The split names collide across versions — the biggest cross-version trap
+
+With all three versions now confirmed, **v2 is the odd one out**:
+
+| Actual role | v1 calls it | v2 calls it | v3 calls it |
+|---|---|---|---|
+| 80% of the in-period pool | **Train** | **Train** | **Train** |
+| 20% random holdout, **same period** as train (in-distribution) | **Test** | **Validation** | **Test** |
+| **Out-of-time** holdout, later than train | **Validation set 1 / 2** | **Test** | **OOT** |
+
+**"Test" means an in-period random split in v1 and v3, but the out-of-time block in v2.** So comparing "v2 test precision" against v1's or v3's compares an **out-of-time** number against an **in-distribution** one: v2's is measured under a strictly harder condition and will look worse for reasons that have nothing to do with the model. **Any cross-version performance table must key on the *role*, not the name.** This document uses the role labels above throughout.
+
+Two further points. **v2's naming is the misleading one** — v1 and v3 agree with each other, so a reader who checks only v1 and v3 will form the wrong expectation about v2. And **v3's convention is the clearest of the three**: it reserves the name "OOT" for the out-of-time block instead of overloading "Test" or "Validation".
+
+### The splitting variable changed: `lossdate` (v1) → `ReportedDate` (v2)
+
+v1 splits on **`lossdate`** (when the accident happened); v2 splits on **`ReportedDate`** (when the claim was notified). These differ by the **reporting lag**.
+
+- **v2's choice is arguably the more honest one operationally:** only *reported* claims are knowable at training time, so ordering by `ReportedDate` reflects the information actually available at each point — a `lossdate` ordering can place a late-reported claim in the training window even though the insurer did not know about it yet.
+- **But the two versions' boundaries are not comparable.** A v2 `ReportedDate` cut is not the same population slice as a v1 `lossdate` cut, so the split windows cannot be lined up directly across versions.
+- **Reporting lag is not constant.** It plausibly varies by channel (FNOL phone vs ENOL online) and by severity, so sorting by `ReportedDate` **reshuffles** the loss-date ordering, and the OOT block can contain *older losses reported late*. 🔎 Quantify the lag distribution (and its drift) before treating v2's OOT block as cleanly "later" in loss terms.
+
+### Data window — and why it matters for the SFP narrative
+
+The cutoff filter is strict (`>`), so everything **on or before 2018-01-01** is removed: **v2's window is 2018-01-02 onward.**
+
+> **⚠️ This window lies entirely *after* v1's.** v1 trained on `lossdate < 2017-04-01`. So essentially **all** of v2's training data was generated while **v1 was already in production**, meaning v2's labels are v1-influenced across the board. The SFP hand-off is therefore **not a partial contamination of v2's training set — it is close to total.** This is a concrete, code-level confirmation of the "v2a trained on `model_v1_observed_outcome`" narrative, and it is stronger than that narrative previously claimed. 🔎 Confirm v1's actual deployment date to state "all" rather than "essentially all".
+
+### ✅ The corrupted-record exclusion — confirmed v2, and it drops a whole DAY
+
+`dataset[dataset['ReportedDate'] != '2020-08-24']`.
+
+- ✅ **Closes the open item** carried since the v1 section: this exclusion belongs to **v2**, not v1.
+- ⚠️ **It is not "a corrupted record".** The filter tests `ReportedDate` equality, so it removes **every claim reported on 2020-08-24** — potentially a full day of claims, not one row. Both this document and `problem.md` previously described it as a single record. 🔎 **Count the rows actually dropped.** If it is a whole day, that is a non-trivial hole in the middle of the series, and — depending on where 2020-08-24 sits relative to the 80th percentile of `ReportedDate` — the hole may fall inside the OOT block.
+
+### ⚠️ A silent data-loss region between the train pool and the OOT block
+
+The OOT set is taken as `tail(20%)` and **then** filtered to `ReportedDate > 2019-12-01`. Rows that are in the tail 20% **but** reported on or before 2019-12-01 are:
+
+- **not** in `head(80%)` → excluded from Train and Validation, **and**
+- filtered out of the tail → excluded from Test.
+
+**They are dropped from the run entirely, and nothing records it.** Consequences:
+
+- **The nominal 80/20 is not the realised split.** The OOT/Test block is **smaller than 20%** of the post-cutoff data by an unrecorded amount. Always report *realised* split sizes; never quote the nominal fractions.
+- 🔎 **One number decides whether this matters: the 80th-percentile `ReportedDate`.** If it falls *later* than 2019-12-01 the date filter is non-binding and nothing is lost; if *earlier*, the loss is real and potentially large. Compute this first.
+- **Reproducibility caveat:** a hard-coded date is being applied to a *proportional* tail. Re-running on an extended dataset moves the tail later in time, changing whether the filter binds — so **the split is not stable across re-runs**, and a re-run on refreshed data will not reproduce the original partition.
+
+*(Minor, for completeness: `floor(0.8n) + floor(0.2n) ≤ n`, so head and tail never overlap — there is no leakage between the train/validation pool and the OOT block. They may leave a single row assigned to neither.)*
+
+### ✅ v2's train/validation split IS stratified on the target — unlike v1
+
+`train_test_split(..., stratify=data['veh_total_loss'])`. This **closes the open item** and resolves it in v2's favour: the concern flagged for v1 does **not** carry over.
+
+- **v1 vs v2:** v1 passes the label array *positionally* with **no `stratify=`**, so v1's split is plain random and Train/Test class balances can drift apart. v2 passes `stratify=` explicitly, so Train and Validation carry **matched positive rates by construction**. Under precision ≥ 0.985 with a minority positive class, this materially stabilises v2's validation precision estimate.
+- **⚠️ Stratification applies to the in-period pool only.** The OOT block (v2's "Test") is the temporal tail — its positive rate is whatever the later period actually contained, and nothing balances it against Train.
+
+  > **This is quietly useful.** Because the in-period split *is* stratified, the Train/Validation positive rate is fixed by construction, so **any positive-rate gap between Validation and the OOT Test block is real temporal drift, not split noise.** That makes the comparison a clean, essentially free diagnostic — and under the SFP hypothesis the direction is predicted: as v1 scrapped more, forced positives accumulate, so the positive rate should be **rising** into the later window. 🔎 Compute the positive rate in Train / Validation / Test and compare — a cheap, high-value check that the stratification makes interpretable.
+
+- **A modest sharpening, not a defect:** stratifying on the target means stratifying on a **contaminated** label, so the in-period holdout is built to mirror the training distribution *including its forced-positive share* — it therefore cannot serve as a check on the contamination. This is true of any random in-period split; stratification only makes the mirroring exact rather than approximate. Stratifying is the right call, and it is noted here only so the validation set is not mistaken for independent evidence about the label problem.
+- 🔎 Still unrecorded: the split's `random_state`.
+
+## v2 target — `veh_total_loss` alone (v1's `∨ fast_track` term is gone)
+
+v2 trains on the raw **`veh_total_loss`** flag, with no derivation on top of it. Compared with v1:
+
+| | v1 | v2 |
+|---|---|---|
+| Target | `veh_total_loss ∨ veh_fast_track` | **`veh_total_loss`** |
+| Forced label in the **formula**? | ✅ yes — the `fast_track` disjunct | ❌ **no** |
+
+**This is a real change, and it narrows an earlier claim.** The statement that "the forced label is a property of the real label, not an artefact of the synthetic DGP" holds **for v1**, where the label formula itself sets `target = 1` for a fast-tracked vehicle that was never verified. **v2 does not do this.** So P1 is not written into every version's target definition, and the documentation has been corrected accordingly.
+
+### 🔎 The question this raises: what is `veh_total_loss` for a scrapped car?
+
+Dropping the disjunct does **not** by itself make v2's label clean — it only moves where the contamination could enter. Everything now depends on one fact:
+
+> **For a vehicle that v1 fast-tracked to scrap in 2018–2021, what value does `veh_total_loss` carry?**
+
+Two possibilities, with opposite consequences:
+
+- **(a) It is recorded as `1`** — scrapping is treated as settling the total-loss question. Then **P1 still holds for v2**, but it lives in the **data** rather than in the label formula. The SFP mechanism is unchanged; only its location moves, and the thesis's account survives with a corrected description.
+- **(b) It stays `0`** — because `veh_total_loss` genuinely requires garage confirmation, which a scrapped car never gets. Then v2 was trained to call scrapped vehicles **negative**, which is a *different* pathology and would substantially change the analysis.
+
+**(a) is the more plausible reading operationally, but it is not confirmed.** Note that v1's own data made **(b)** possible in its era — the combination `fast_track = 1 & total_loss = 0` is precisely what v1's disjunct existed to patch, which means that in v1's window a fast-tracked vehicle did *not* automatically carry `total_loss = 1`. Whether that changed by v2's window is exactly what needs checking. A third possibility is that such rows are null and dropped, which would be a selection effect rather than a forced label.
+
+> 🔎 **The check:** cross-tabulate `veh_total_loss` against the fast-track/scrap flag on v2's training data (which survives, unlike v1's). The `fast_track = 1` row of that table answers it outright. **This is now the single highest-value open item for v2** — it determines whether P1 applies to the currently-live model, and if so by what route.
+
+## v2 model training call — real XGBoost configuration (**xgboost 1.4.2**, model trained **2021**)
+
+```python
+xgb.XGBClassifier(
+    objective="binary:logistic",   # clean binary — unlike v1's mlogloss-on-binary
+    eval_metric="auc",             # ⚠️ not precision — see below
+    colsample_bytree=0.6,
+    eta=0.147686...,               # ⚠️ alias of learning_rate — BOTH are set, values differ
+    gamma=15.0,                    # very high min split-loss (default 0)
+    grow_policy="depthwise",       # the default
+    learning_rate=0.0887667...,    # ⚠️ conflicts with eta above
+    max_delta_step=10,
+    max_depth=10,
+    min_child_weight=1,            # default — permissive, tension with gamma=15
+    n_estimators=450,
+    random_state=42,
+    reg_alpha=20.0,                # ⚠️ very strong L1 (default 0)
+    reg_lambda=0.0123626...,       # ⚠️ L2 ~80× BELOW default (1.0) — effectively off
+    scale_pos_weight=4.5,          # ⚠️ upweights the contaminated positive class
+    subsample=1.0,                 # no row subsampling
+    n_jobs=-1,
+)
+```
+
+**Trained in 2021**, deployed ~2022, still live in 2026 — see "A five-year-old model" below.
+
+### ⚠️ 1. `eta` and `learning_rate` are both set, and they disagree — the effective learning rate is ambiguous
+
+`eta` is XGBoost's native name for `learning_rate`; they are **the same hyperparameter**. Here both are passed with **different values**: `0.147686` vs `0.0887667` — a **1.66×** difference. One silently wins.
+
+- In the sklearn wrapper, `learning_rate` is an explicit constructor argument while `eta` arrives via `**kwargs`, and kwargs are merged *over* the explicit params — so **`eta = 0.147686` is the more likely effective value**. But this precedence is **XGBoost-version-dependent**, so it **must be verified, not assumed**. (v2 pins **xgboost 1.4.2**; later 2.x/3.x releases may warn or error on duplicate aliases instead — which is consistent with v3, on 3.2.0, setting `learning_rate` alone.)
+- The difference is not cosmetic: with `n_estimators = 450`, the learning-rate × rounds budget is **66.5 vs 39.9** — materially different amounts of fitting.
+- 🔎 **Definitive check:** load the saved v2 artefact and read the booster's own config —
+  `model.get_booster().save_config()` returns JSON containing the `eta` actually used. Do this before quoting any v2 hyperparameter in the dissertation. **This is a reproducibility defect in the production code, and worth reporting to the team regardless of which value won.**
+
+### ⚠️ 2. `eval_metric="auc"` is misaligned with the business constraint — and is computed on contaminated labels
+
+Two separate problems, both material:
+
+- **AUC does not measure what the deployment constraint measures.** The business rule is **precision ≥ 0.985 at a very high cutoff** — a property of the extreme top tail of the score distribution. AUC is rank-based and **threshold-free**, weighting the whole score range roughly equally. A model can post an excellent AUC while behaving poorly exactly where the threshold sits. Optimising/monitoring AUC therefore gives **almost no assurance about precision at τ**. *(v1 used `mlogloss`; neither version's training metric is the precision the business actually enforces.)*
+- **The AUC is measured against SFP-contaminated labels.** v2 trains on v1's production log, where every v1-scrapped vehicle is recorded as a total loss (the forced label). So the metric rewards v2 for **ranking highly exactly those cases v1 chose to scrap**. Because v1 and v2 share much of the feature space, a high AUC partly certifies **agreement with the previous model's decisions** rather than agreement with reality. This is the contaminated-metric trap operating **inside the training objective**, not merely in the reported precision.
+
+> The long non-round decimals on `eta`, `learning_rate` and `reg_lambda` are characteristic of an **automated hyperparameter search** (Bayesian optimisation / random search) rather than hand-tuning; the round values (`gamma=15.0`, `reg_alpha=20.0`, `scale_pos_weight=4.5`, `max_delta_step=10`) look like fixed or grid choices. If a search was run, it was **optimising AUC** — so the misalignment above propagates into the entire hyperparameter selection, not just the reported metric. 🔎 Confirm whether a search was run and what it optimised.
+
+### ⚠️ 3. `reg_alpha = 20.0` vs v1's default `0` — this CONFOUNDS the SHAP concentration analysis
+
+**This is the finding with the largest consequence for the dissertation's central contribution.**
+
+The regularisation is strikingly asymmetric: **L1 `reg_alpha = 20.0`** (default 0 — very strong) against **L2 `reg_lambda = 0.0123626`** (default 1.0 — roughly **80× below** default, i.e. effectively switched off). Strong L1 drives **sparsity in leaf weights**, which mechanically **concentrates the model onto fewer features**. `gamma = 15.0` (default 0) pushes the same way by pruning all but the most productive splits.
+
+Now compare with v1, whose training call sets **none of these** — v1 runs with `reg_alpha = 0`, `reg_lambda = 1.0`, `gamma = 0`.
+
+> **⚠️ Therefore a v1 → v2 rise in feature-importance concentration is NOT, on its own, evidence of an SFP loop.** The thesis's central statistic — SHAP-importance concentration (Simpson / Hill / Shannon) rising across model generations — has a **competing mechanical explanation**: v2 is far more heavily L1-regularised than v1, and L1 concentrates importance by construction. The two hypotheses predict the same direction of change.
+>
+> **This must be addressed head-on, not left implicit.** Options, in rough order of strength: **(i)** run the concentration comparison on the **v2a → v3a** pair rather than v1 → v2a, *provided* v3 shares v2's hyperparameters (🔎 obtain v3's config — this is now a high-priority item); **(ii)** re-train a v1-configured model on v2's data (and vice versa) to separate the regularisation effect from the data effect; **(iii)** report concentration under matched hyperparameters; **(iv)** at minimum, state the confound explicitly as a limitation and bound its plausible size. Note that option (i) is already the specified design for a *different* reason (parallel-trends violation at the pre-ML→v1 era boundary) — so the two arguments reinforce each other.
+
+### ⚠️ 4. `scale_pos_weight = 4.5` — upweights the contaminated class, and guarantees miscalibration
+
+- **It amplifies the SFP loop directly.** The positive class *includes the forced positives*. Weighting positives 4.5× means the manufactured labels are given 4.5× the influence on the fitted model — a concrete amplification channel from v1's decisions into v2's parameters.
+- **Implied class balance:** if set by the conventional `n_neg / n_pos` rule, it implies a positive rate near **18%**. 🔎 Confirm whether it was computed from the data or tuned by the search — the two readings support different claims about the label distribution.
+- **⚠️ The score is NOT a probability, and `0.872` must never be read as "87.2% chance of total loss."** `scale_pos_weight` inflates predicted odds by roughly the weight factor, and the pipeline applies **no calibration step** (§ "Training Process"). Naively dividing the predicted odds by 4.5:
+
+  | Score | Implied true probability *(illustrative only)* |
+  |---|---|
+  | 0.872 (pre-2026-07 threshold) | ≈ **0.60** |
+  | 0.825 (current threshold) | ≈ **0.51** |
+
+  *These are order-of-magnitude illustrations, not calibrated estimates* — the correction assumes the model is otherwise well-calibrated, which an uncalibrated tree ensemble is not. But the direction is unambiguous and the implication is serious: **the current threshold may sit close to a coin-flip in true-probability terms.** 🔎 This deserves a proper calibration curve on garage-verified rows (where the true outcome is observed) as a priority piece of analysis — it bears directly on the false-positive cost that the ≥ 0.985 precision floor exists to control.
+- **Consequence for IPS:** the known caveat that "uncalibrated scores distort propensity weighting" now has a **concrete, quantified cause** rather than being a generic worry. Any use of v2 scores as propensities must account for the `scale_pos_weight` inflation.
+
+### 5. Other parameters — and what they say about the fit
+
+- **`objective="binary:logistic"`** — a clean binary setup. This **resolves for v2 the ambiguity flagged for v1**, which applied *multiclass* `mlogloss` to a binary target. `predict_proba` returns 2 columns; the score is column `[:, 1]`.
+- **`gamma=15.0` vs `min_child_weight=1`** — these pull in opposite directions: gamma prunes aggressively, while min_child_weight is left at its permissive default (tiny leaves allowed). Combined with `max_depth=10`, the trees may be deep but every split must clear a high bar. Consistent with an automated search that found strong pruning + strong L1 rather than a hand-designed configuration.
+- **`subsample=1.0`** — **no row subsampling**; randomisation comes only from `colsample_bytree=0.6`. Less variance reduction than the usual setup, and with 450 deep trees the overfitting pressure is held back mainly by `gamma`/`reg_alpha`.
+- **`max_delta_step=10`** — the parameter conventionally used for logistic objectives under class imbalance; its presence alongside `scale_pos_weight` is coherent, though at 10 it is permissive enough to rarely bind.
+- **`random_state=42`** — reproducible (v1 used seed 10⁹ for the model and `random_state=0` for the split). 🔎 Whether v2's `train_test_split` also uses 42 is still unconfirmed.
+- **`n_jobs=-1`** — infra only (v1 used 20).
+
+### ⚠️ 6. A five-year-old model: trained 2021, deployed ~2022, still live in 2026
+
+The training year fixes the timeline and raises two issues the dissertation should state plainly:
+
+- **v2 has been scoring live claims for ~4–5 years without retraining** — and its training window opens in January 2018. It is scoring 2026 claims from patterns learned in 2018–2021 data. Whatever drift has occurred (vehicle values, parts costs, repair economics, channel mix) is unaddressed, and the SFP loop has been compounding across that entire period. This also sharpens why v3's failure matters: the only attempted refresh did not ship.
+- **⚠️ The training window spans COVID-19.** UK motor claim volumes collapsed during 2020 lockdowns and the mix of incidents changed. Two consequences: **(a)** v2 learned partly from an anomalous period; **(b)** more subtly, **the proportional `head`/`tail` split interacts badly with non-uniform volume** — because 2020 contributes far fewer rows than a normal year, the trailing 20% *of rows* reaches **further back in calendar time** than a uniform-volume assumption would suggest. That makes the hard-coded `ReportedDate > 2019-12-01` filter **more likely to bind**, and therefore makes the silent data-loss region flagged above **more likely to be non-empty**. 🔎 This raises the priority of computing the 80th-percentile `ReportedDate`.
+- 🔎 The earlier placeholder describing v2's window as "≈ 2022–2024" is **wrong** and has been corrected: training happened in 2021, so the data window must end in 2021 or earlier.
+
+## Data availability — v2's training dataset survives, v1's does not
+
+v1's training dataset has been **destroyed under the data-retention period**. **v2's training dataset still exists**, with paths configured on the company `Z:` drive (to be wired in from the saved config file when work moves onto the Allianz machine).
+
+This asymmetry shapes what the dissertation can actually do:
+
+- **v2 is re-derivable end-to-end** — the split can be re-run, the model re-trained and re-scored, and the label construction audited directly against source rows.
+- **v1 is not.** Only its code and serialised artefacts (model pickle, `inputs.pkl`) survive, so **every v1 statement in this document is a reading of code and artefacts, not something re-computable from data.**
+- **For the SFP analysis specifically:** the v1 → v2 hand-off can only be examined **from the v2 side**. Anything requiring v1's actual training rows — e.g. directly measuring the forced-positive rate *within v1's training labels* — is **not recoverable**, and must be inferred from v1's production log or from the artefacts.
+- **Therefore the empirical work should be anchored on v2**, with v1 entering as documented structure rather than as re-analysable data.
+
+## The decision rule — a single global cutoff (no mobility segmentation)
+
+```python
+predictions["FastTrackerDecision"] = (
+    predictions["FasterTrackerProbability"] > threshold
+).astype(int)      # 1 → fast-track to scrap, 0 → garage
+```
+
+Three things this settles:
+
+1. **v2 uses ONE global threshold.** There is no mobility segmentation, no per-segment cutoff, no percentile rule — a single scalar `threshold` compared against a single score column. **This closes the open item left by the v1 section**, which recorded "whether v2/v3 also segment by mobility is unconfirmed".
+2. **Therefore the policy *form* is genuinely NOT invariant across versions.** v1 = **two** cutoffs keyed on vehicle mobility (0.75 immobile / 0.85 mobile); v2 = **one** global cutoff. Any statement that "the policy form (a single absolute cutoff) is invariant across versions" is **false as stated** — it holds for v2, not for v1. The invariant is narrower: *an absolute cutoff in score space* (never a percentile), with the **arity** of that cutoff differing by version.
+3. **The comparison is strict `>`, not `≥`.** This documentation (and the synthetic generator) writes the rule as `score ≥ τ`; production uses `score > τ`. With continuous scores the difference is measure-zero and practically irrelevant, but it should be **`>` in any code that reproduces the production decision** — an exact-tie row would be classified differently. 🔎 Minor: confirm the exact spelling of the two columns (`FastTrackerDecision` vs `FasterTrackerProbability` — the "Fast"/"Faster" mismatch is transcribed as read and looks like a genuine inconsistency in the production code, not a typo introduced here).
+
+## Threshold history — v2 is piecewise-constant, not constant
+
+| Period | Threshold | Status |
+|---|---|---|
+| documented span → 2026-06-30 14:30 | **0.872** | superseded |
+| 2026-06-30 14:30 → present | **0.825** | **currently in force** |
+
+- ✅ **The break instant is confirmed (2026-07-31): 2026-06-30, 14:30 UK local time** (BST, UTC+1) = **2026-06-30 13:30 UTC**. The earlier "≈ 2026-07-01 / ≈ four weeks before 2026-07-29" figure is superseded.
+- **It is an intra-day instant, not a date — 2026-06-30 spans both regimes.** Two operational consequences for any date-cut analysis:
+  - **If the log's date column is date-only**, every row on 2026-06-30 parses to 00:00 and falls into the pre-change regime, including claims actually decided at 0.825 after 14:30. **Drop 2026-06-30 entirely** unless the log carries a timestamp. It is one day, but it sits exactly on the break — precisely where the (0.825, 0.872] treated-side rows are.
+  - **If the log's timestamps are UTC**, the boundary is **13:30**, not 14:30. A one-hour band of rows changes regime depending on which is used. Confirm the log's timezone before cutting.
+- The break is recorded once, in `src/config.py::DECISION_RULES["v2"]` (`break_at_local` / `break_at_utc` / `break_tz`); `src/threshold.py::apply()` converts tz-aware date columns to `Europe/London` before comparing. Nothing else should hard-code the date.
+- The threshold was **lowered**, not raised: a lower bar means **more claims are scrapped**, so the post-change regime mechanically produces **more forced positives** per unit volume.
+- **⚠️ The table above is bounded by what the change record covers, not by all of production history.** An earlier change (`0.825 → 0.872` at 2026-02-25 16:26 UK) is known, and the record does not reach back past it. See § "Limitation — the threshold change record is incomplete before 2026-02-25".
+
+### ✅ What this closes: v3's training data is single-regime
+
+**All of v3's training logs were generated under `threshold = 0.872` only.** The 0.825 regime lies entirely *after* v3's training window. Consequences:
+
+- The **2026-06-25 researcher concern** — that a threshold change might have overlapped a retraining window and injected decisions made under a different cutoff into the training labels — is **closed for v3**. v3 trains on a policy-homogeneous log.
+- It remains **open** for (i) analysis on the **current** v2 production log, which now spans both regimes, and (ii) **any future retrain**, whose window would straddle the break.
+- **Practical rule for this project:** any per-row analysis on the real v2 log must **either** restrict to `date < change_date` (the 0.872 regime, matching v3's training data) **or** carry the regime as an explicit covariate. Silently pooling the two regimes conflates two different treatment assignments.
+
+> ⚠️ **This section rests on the change record being complete, and it is not.** An earlier change is known to exist (`0.825 → 0.872` at 2026-02-25 16:26) which, if the prior 0.825 era extended back into v3's window, would break the single-regime claim above. The record does not go back far enough to say. The claim is **retained as the documented reading**, with the exposure carried explicitly as a limitation — see § "Limitation — the threshold change record is incomplete before 2026-02-25" below.
+
+### ⚠️ Why the *lowering* is itself SFP evidence — a candidate reading (not confirmed)
+
+The direction of the change is diagnostic, and it is worth stating carefully because it is a strong argument if it holds up:
+
+Under SFP contamination, **observed** precision is inflated by construction — every scrapped car is recorded as a total loss (P1), so scrapped rows are *all* counted as true positives. Measured precision therefore sits comfortably above the 0.985 floor **regardless of how many repairable cars are actually being scrapped**. A team monitoring that contaminated metric sees ample headroom and can justify **lowering** the cutoff to capture more volume — which scraps more cars, forces more positives, and keeps measured precision high. That is the **contaminated-metric trap (P6) closing into an operational feedback loop**: the metric that is supposed to constrain the policy is itself produced by the policy.
+
+> **⚠️ This is an inference from the direction of the change, not a confirmed account.** Benign alternatives exist and must be ruled out first: the cutoff may have been re-tuned against a genuinely shifted score distribution, or relaxed for a deliberate volume/cost trade-off, or changed for a reason unrelated to precision. 🔎 **Obtain the stated rationale for the 0.872 → 0.825 change** before this reading appears in the dissertation as anything stronger than a hypothesis. Note also the contrary signal: if SFP had inflated v2's scores upward, holding precision would typically require *raising* the cutoff — the observed lowering is consistent with the contaminated-metric reading but not with a naive score-inflation-only story.
+
+## The threshold change creates a temporal overlap band — (0.825, 0.872]
+
+This is the analytically important consequence, and it **parallels the v1 mobility band exactly, but in time rather than cross-section**.
+
+A claim scoring in **(0.825, 0.872]** was:
+
+| Regime | Decision for a score in (0.825, 0.872] | Garage outcome observed? |
+|---|---|---|
+| **Pre-change** (τ = 0.872) | **garage** | ✓ **yes — verified outcome exists** |
+| **Post-change** (τ = 0.825) | **scrap** | ✗ no — forced positive |
+
+**What this gives the framework:**
+
+- **Garage-verified outcomes exist for scores up to 0.872**, drawn from the pre-change era. The blanket premise "**zero garage rows above τ**" is, for v2, only true above **0.872** — not above the *current* 0.825.
+- **Positivity holds in the band when pooling across the change date.** Conditional on the score alone, `e(s) = Pr(D=1 | s) = Pr(post-change | s) ∈ (0,1)` for `s ∈ (0.825, 0.872]` — at the same score, a pre-change claim is garaged and a post-change claim is scrapped. Within *either* regime taken alone, positivity is still dead (deterministic step function).
+- **A cutoff-shift design becomes available:** the same claims are treated differently before and after an exogenous policy break — a DiD / RDD-with-moving-cutoff, with **two** discontinuity locations (0.872 pre, 0.825 post) instead of one.
+- **It anchors the mitigation counterfactual** with *real observed outcomes for high-scoring vehicles* (pre-change, 0.825–0.872), instead of blind extrapolation above a single cutoff.
+
+**⚠️ Two caveats — this band is weaker than v1's:**
+
+- **The overlap is confounded by time, not by an observed covariate.** v1's band is confounded by *mobility*, which is measured and can be adjusted for. v2's band is confounded by **calendar time** — and everything that moves with it: score drift, case-mix, FNOL/ENOL channel mix, seasonality, portfolio composition. There is no clean "mobility adjustment" analogue; identification needs a parallel-trends-style assumption across the break, which is exactly the assumption this project has already found violated at era boundaries elsewhere.
+- **The post-change window is ~4.3 weeks** (2026-06-30 14:30 → 2026-07-31). Sample size in the band on the post-change side is small, and given the documented thinness of the scrapped partition this may be **underpowered before any modelling begins**. 🔎 Count the actual rows in (0.825, 0.872] on each side of the break *first*, and gate any analysis on that count. If the date column is date-only, 2026-06-30 must be dropped — it costs the single most valuable day.
+
+## Limitation — the threshold change record is incomplete before 2026-02-25
+
+**This is a known, unresolvable gap in the source record, carried as a limitation rather than fixed.**
+
+The June break (`0.872 → 0.825`, 2026-06-30 14:30 UK) is exact and confirmed. It is **not** the only change. A second, earlier one is also confirmed:
+
+| Instant (UK local) | Change | UTC |
+|---|---|---|
+| **2026-02-25 16:26** | `0.825 → 0.872` | 16:26 UTC (February is GMT, UTC+0) |
+| **2026-06-30 14:30** | `0.872 → 0.825` | 13:30 UTC (June is BST, UTC+1) |
+
+So 0.825 was already in force for some period *before* 2026-02-25. **How long is unknown: the deployment/change record does not reach back past that point and cannot be reconstructed.** Note also that the two instants sit in different UTC offsets — one fixed offset applied to both is wrong.
+
+**What is deliberately *not* done about it.** The earlier change is recorded in `config.DECISION_RULES["v2"]["known_unmodelled_break"]` but is **not** encoded in `regimes`. Encoding it would require a start date for the first 0.825 era; inventing one would silently relabel years of v2 log rows on a guess, which is worse than a documented gap. `regimes` therefore describes the span the record supports, and `apply()` reproduces the decisions the record can vouch for.
+
+**What it exposes.** v3's window (`2023-06-01 → 2026-05-01`) and its OOT slice (`2025-12-01 → 2026-05-01`) both *contain* 2026-02-25. If the prior 0.825 era reached into that window, then:
+
+- v3's training labels span two policies rather than one, and the "v3 is policy-homogeneous" claim above does not hold;
+- v3's recall-collapse result — load-bearing in the SFP narrative — was measured on a holdout straddling a policy break;
+- the 2026-06-25 researcher concern (a threshold change overlapping a retraining window) would be live for v3, not closed.
+
+**Why the claim still stands as written.** The exposure is conditional on a fact the record cannot supply. Rather than retract a documented finding on the strength of an unmeasurable possibility, the finding is retained and the possibility is stated. **Direction of the risk is one-way:** the gap can only *weaken* the single-regime claim, never strengthen it, so every result resting on it should be read as an upper bound on policy homogeneity.
+
+**What would close it.** Any of: (i) the deployment history before 2026-02-25; (ii) an empirical read of the v2 log itself — the minimum scrapped score per month should step at each true break, so `read_off()` run month-by-month across v3's window would *reveal* an unrecorded regime without needing the change log at all. 🔎 (ii) is cheap and does not depend on the broken record — run it first.
+
+> **Open items for v2.** *Threshold:* ~~(1) exact change date~~ ✅ **closed 2026-07-31 — 2026-06-30 14:30 UK local (13:30 UTC)**; (1b) **the timezone and time-granularity of the log's date column** — decides whether the break can be cut intra-day at all, and whether the boundary is 14:30 or 13:30 (new, raised by the exact time); (2) ~~one change or two~~ ✅ **at least two — 2026-02-25 16:26 confirmed**; what remains is (2b) **when the first 0.825 era began — record broken, see the Limitation section above**, and (2c) **monthly `read_off()` across v3's window** as the empirical substitute; (3) stated rationale; (4) exact column spellings in `score.py`; (5) row counts in (0.825, 0.872] each side of the break — **excluding 2026-06-30 if the column is date-only**.
+> *Split:* (6) the **80th-percentile `ReportedDate`** — decides whether the silent data-loss region above is empty or large; (7) realised split sizes (never the nominal 80/20); (8) rows dropped by the 2020-08-24 filter; (9) the train/validation split's `random_state` (`stratify=` now ✅ confirmed); (9b) **positive rate in Train / Validation / OOT Test** — a cheap drift check the stratification makes interpretable; (10) reporting-lag distribution (`ReportedDate − lossdate`) and its drift.
+> *Training config (⚠️ highest priority first):* (11) **which of `eta` / `learning_rate` actually took effect** — read the saved booster's config; (12) **v3's hyperparameters**, needed to know whether the SHAP-concentration comparison can be run on a regularisation-matched pair; (13) whether `scale_pos_weight=4.5` was computed from the data or tuned; (14) whether a hyperparameter search was run and what it optimised; (15) a **calibration curve on garage-verified rows** (does 0.825 sit near a coin-flip in true probability?); (16) `train_test_split`'s `random_state`.
+> *Highest value of all:* (17) **cross-tab `veh_total_loss` × the fast-track/scrap flag on v2's training data** — decides whether P1 applies to the live model (see § "v2 target").
+> *Still no v2 counterpart:* (18) extract SQL and raw shape; (19) whether v1's `cc_fttl` exclusion applies to v2; (20) runtime environment / library pins; (21) feature set. *(Target and XGBoost config now ✅ confirmed.)*
+
+
+# Model v3 — Data Window (real, confirmed 2026-07-29)
+
+> **Scope: the data window only.** This is the first confirmed real detail for v3. Its **split scheme, target construction, training configuration, runtime environment and feature set are all still 🔎 TBD** — do not assume it follows v2's.
+
+v3 selects its dataset with a `subset_by_date` function applied to **`ReportedDate_CLAIM`**:
+
+```python
+old_date      = DATA_START_DATE   # 2023-06-01
+immature_date = DATA_END_DATE     # 2026-05-01
+
+df.filter((df['ReportedDate_CLAIM'] > old_date) & (df['ReportedDate_CLAIM'] < immature_date))
+```
+
+Both bounds are strict, giving a window of **2 years 11 months**: `2023-06-01 < ReportedDate_CLAIM < 2026-05-01`.
+
+## Split scheme — a date-bounded OOT block plus a shuffled in-period split
+
+v3 divides the window into **two kinds**: an out-of-time block and a non-OOT pool that is then split.
+
+```python
+# OOT      : ReportedDate_CLAIM >= 2025-12-01
+# non-OOT  : ReportedDate_CLAIM <  2025-12-01
+
+shuffled = non_oot.sample(fraction=1, shuffle=True, seed=123)   # full permutation
+test  = shuffled.head(0.2 * len(non_oot))     # first 20%
+train = shuffled.tail(-0.2 * len(non_oot))    # "all but the first 20%" → the other 80%
+```
+
+| Role | Definition | Span |
+|---|---|---|
+| **Train** | 80% of the shuffled non-OOT pool | 2023-06-01 → 2025-12-01, interleaved |
+| **Test** *(in-period)* | 20% of the same shuffled pool | same span, interleaved |
+| **OOT** | `ReportedDate_CLAIM ≥ 2025-12-01` | 2025-12-01 → 2026-05-01 — **5 months** |
+
+**This is the cleanest split of the three versions.** The OOT boundary is an explicit date (not a proportional tail), the 5-month holdout closely matches the documented "~6 months OOT" methodology, and `head(0.2n)` / `tail(-0.2n)` are **exactly complementary** — no overlap, no gap, and none of v2's silent data-loss problem. v3 also names the out-of-time block **"OOT"** rather than reusing "Test" or "Validation", which is the clearest of the three conventions.
+
+*(Implementation note: `sample(fraction=…, shuffle=…, seed=…)`, `filter`, and `tail(-k)` are **Polars**, not pandas — v3 is a modern rewrite. `tail(-k)` means "drop the first k rows". Third split seed convention across versions: v1 `random_state=0`, v2 `42` for the model, v3 `seed=123`.)*
+
+### Is shuffling the in-period pool a good choice?
+
+**Yes — it is a reasonable and standard design.** The temporal question is handled by the separate, date-bounded OOT block, so the in-period split is free to measure in-distribution fit. v1 and v2 both use in-period random splits too.
+
+One clarification on the wording: shuffling does not *remove* time bias — it makes the in-period test set match train in time, so that test set simply **cannot show drift**. Drift is measured by the OOT block instead. So the in-period number is an in-distribution figure, and generalisation claims should rest on OOT. Nothing wrong with the code; just don't quote the in-period number as evidence of generalisation.
+
+Two smaller notes:
+
+- **No stratification.** `sample(fraction=1, shuffle=True, seed=123)` + `head`/`tail` has no `stratify=`. v2 stratified on the target; v3 does not. With a minority positive class and a precision ≥ 0.985 target, the 20% test set's positive count affects how stable the precision estimate is. 🔎 Confirm stratification isn't applied elsewhere in v3's pipeline.
+- 🔎 **If a claim can contain more than one vehicle**, a random split can put two vehicles from the same claim on opposite sides, which would flatter the in-period test score. A quick check of the vehicles-per-claim distribution settles it; if multi-vehicle claims are common, group the split by claim. The OOT block is unaffected either way.
+
+> **One question worth settling: which split produced v3's recall collapse?**
+>
+> "Recall collapsed when precision was held at ≥ 0.985" is a load-bearing fact, and it means different things depending on where it was measured:
+>
+> - **On the OOT block:** some of the collapse could just be ordinary drift over those 5 months, not SFP contamination — so the finding is confounded.
+> - **On the in-period Test:** drift is ruled out by construction, so the collapse is harder to explain away — a stronger result for the SFP argument.
+>
+> 🔎 Worth confirming which one it was.
+
+## v3 decision rule & threshold — single cutoff, and far stricter than v2
+
+**Target column: `Fttl`.** Threshold is tuned to a precision target, and two calibrations are recorded:
+
+| Precision target | v3 threshold | v2's threshold for comparison |
+|---|---|---|
+| **0.985** (the business floor) | **0.984** | 0.872 |
+| 0.97 | **0.970** | — |
+
+Three things this settles or raises.
+
+**1. ✅ v3's decision-rule form is a single absolute cutoff** — same form as v2, *not* v1's mobility-segmented pair. This closes the last open item on decision-rule form across the three versions: **v1 alone is segmented.**
+
+**2. ✅ It explains the recall collapse quantitatively.** To reach precision 0.985, v3 needs a cutoff of **0.984** — pressed right against the top of its score range. Almost nothing clears that bar, which is exactly what "recall collapsed when precision was held at ≥ 0.985" means. Relaxing the target to 0.97 only buys back a cutoff of 0.970, so the recall recovery from that relaxation is modest: the scores are **densely packed at the top**, and precision is extremely sensitive to the cutoff in that region. The two-point pair (0.985→0.984, 0.97→0.970) is itself the evidence for that density.
+
+**3. ⚠️ But raw thresholds are NOT comparable across versions.** "0.984 vs 0.872" does not by itself mean v3 is stricter, because the two models' score distributions and `scale_pos_weight` values differ. Applying the same crude odds correction used for v2 (divide predicted odds by `scale_pos_weight`):
+
+| | threshold | `scale_pos_weight` | implied true probability *(illustrative)* |
+|---|---|---|---|
+| v2 @ precision 0.985 | 0.872 | 4.5 | ≈ **0.60** |
+| v2 current | 0.825 | 4.5 | ≈ **0.51** |
+| **v3 @ precision 0.985** | 0.984 | 5.552301 | ≈ **0.92** |
+| v3 @ precision 0.97 | 0.970 | 5.552301 | ≈ **0.85** |
+
+On this (rough) like-for-like footing v3 really is far more conservative — it demands roughly a 0.92 chance of total loss where v2 demands about 0.60. **That is the shape of the collapse:** v3 could only hold the precision floor by scrapping almost nothing. As always these are illustrations, not calibrated estimates.
+
+### ⚠️ What does `Fttl` actually mean? — the decision, or the outcome?
+
+The column name is ambiguous in exactly the way that matters most for this thesis:
+
+- **Reading A — the outcome:** "was this vehicle a total loss?"
+- **Reading B — the decision:** "was this vehicle fast-tracked to scrap?"
+
+**v1's target is the reason this is not a pedantic question.** v1's label is `target = veh_total_loss OR veh_fast_track` — the outcome and the decision **deliberately merged**, which is precisely where the forced label (P1) enters at the level of the label *formula*.
+
+**⚠️ But v2 does NOT repeat that construction** — v2's target is **`veh_total_loss` alone**, with the `∨ fast_track` term dropped. So the label-formula forced label is a **v1 phenomenon, not a universal one**, and any claim that P1 is written into the target definition "in every version" is **false**. What `Fttl` does is therefore genuinely open: it could follow v1 (merged), follow v2 (outcome only), or be something else again.
+
+> 🔎 **How to resolve it, cheapest first.** (i) Compare `Fttl`'s **base rate** against the known scrap rate and the known total-loss rate — whichever it matches identifies the reading. (ii) **Cross-tabulate `Fttl` against the scrap/decision column.** If `Fttl = 1` exactly whenever the vehicle was scrapped, it is the decision (Reading B); if a scrapped vehicle can carry `Fttl = 0`, it is the outcome (Reading A); if it is the OR of two fields, the cross-tab will show a v1-style pattern. (iii) Look for v3's **target-construction code** — v1 had an explicit derivation, so v3 probably does too, and that settles it outright.
+>
+> Note that all three readings are consistent with the name "FTTL" (Fast-Track Total Loss), which is itself the fusion of the two concepts — so the name cannot settle it.
+
+**Cross-version status of the target definition:**
+
+| Version | Target | Status |
+|---|---|---|
+| **v1** | `target` = `veh_total_loss OR veh_fast_track` | ✅ **Full derivation code confirmed** |
+| **v2** | **`veh_total_loss`** — the raw flag alone | ✅ **Confirmed — and v1's `∨ fast_track` term is GONE** |
+| **v3** | `Fttl` | ⚠️ **Name only — meaning ambiguous (above)** |
+
+## v3 model training call — real XGBoost configuration (**xgboost 3.2.0**)
+
+```python
+xgb.XGBClassifier(
+    colsample_bytree=0.887008...,
+    subsample=0.980460...,
+    max_depth=3,                     # v2 used 10
+    gamma=0.0004847861...,           # v2 used 15.0
+    learning_rate=0.09973689...,     # single value — no `eta` clash (v2's bug is gone)
+    min_child_weight=44,             # v2 used 1
+    n_estimators=802,                # v2 used 450
+    reg_lambda=1.182373785...,       # v2 used 0.0123626 — near-default now
+    scale_pos_weight=5.552301...,    # v2 used 4.5
+    max_delta_step=61,               # v2 used 10
+    max_leaves=18,                   # v2 did not set this
+    grow_policy="depthwise",
+    n_jobs=-1,
+    random_state=123,
+)
+```
+
+*(Decimals are reproduced exactly as supplied; the trailing `...` marks values truncated at source, not by rounding here.)*
+
+### ⚠️ v3 does NOT share v2's regularisation — the confound is not escaped
+
+The v2 section flagged v2's `reg_alpha = 20.0` as a **competing mechanical explanation** for any rise in SHAP feature-importance concentration, and named "obtain v3's hyperparameters" a **blocking prerequisite** — because the SHAP–DiD design falls back to the **v2a → v3a** pair, which only works if that pair is regularisation-matched.
+
+**It is not matched. The regularisation is effectively inverted:**
+
+| | v2 | v3 |
+|---|---|---|
+| `reg_alpha` (L1) | **20.0** — very strong | **not set ⇒ 0 (default)** |
+| `reg_lambda` (L2) | **0.0123626** — ~80× below default | **1.182373785** — near default |
+| `gamma` | **15.0** — heavy pruning | **0.0004847861** — effectively none |
+
+And the capacity controls differ just as much: v3 uses **shallow, tightly-constrained trees** (`max_depth=3`, `max_leaves=18`, `min_child_weight=44`, 802 rounds), where v2 used **deep trees under heavy penalties** (`max_depth=10`, `min_child_weight=1`, 450 rounds). The two models control complexity by **entirely different mechanisms** — v2 via penalty terms, v3 via tree structure.
+
+> **Consequence: the v2a → v3a pair is confounded too.** Every capacity and regularisation knob differs, so a difference in feature-importance concentration between v2 and v3 **cannot be attributed to the data (and hence to SFP) without controlling for the configuration.** The "run it on v2a → v3a instead" escape route from the v1 → v2a parallel-trends problem is therefore **not available as-is**. Both candidate pairs are now confounded, each for a different reason.
+>
+> The remaining options are the ones already listed in the v2 section, now **required** rather than optional: **(i)** matched-hyperparameter re-training (feasible for v2, whose training data survives; 🔎 v3's data status unknown); **(ii)** a regularisation/capacity sensitivity sweep bounding how much of the observed ΔC the configuration alone can produce; **(iii)** report the concentration result as *consistent with* the loop rather than as identifying it. Whichever route, **every version's configuration must be printed beside its concentration figures.**
+
+> 🔎 **Confirm `reg_alpha` is genuinely absent from v3's call.** The list above does not include it, nor `objective` or `eval_metric`, so the listing may be partial. This matters: if v3 in fact sets `reg_alpha` near v2's value, the confound narrows sharply. Also confirm v3's `eval_metric` — v2 used `auc`, which the v2 section flags as misaligned with the precision ≥ 0.985 constraint.
+
+### What v3 fixed, and one thing it did not
+
+- ✅ **The `eta` / `learning_rate` clash is gone.** v3 sets `learning_rate` only (`0.09973689`), so its effective learning rate is unambiguous — unlike v2, where two aliases carry different values.
+- ✅ **`reg_lambda` is back near its default** (1.18 vs 1.0), instead of v2's effectively-disabled 0.0123626.
+- ⚠️ **`scale_pos_weight` rose from 4.5 to 5.552301.** The score is therefore *further* from a probability than v2's, and the caveat that v2's cutoff must not be read as a probability applies to v3 at least as strongly.
+- ⚠️ **`max_delta_step` jumped from 10 to 61.** At that magnitude the cap is unlikely ever to bind, so it is effectively inert — 🔎 worth confirming it was deliberate rather than a search artefact.
+
+### ⚠️ The xgboost version jump also breaks comparability: 1.4.2 → 3.2.0
+
+v2 ran on **xgboost 1.4.2**; v3 runs on **3.2.0** — spanning two major releases. Identical nominal hyperparameters do **not** guarantee identical models across that gap, because library defaults and internals changed. In particular, the default `tree_method` moved to `hist` in the 2.x line, so v2 and v3 may be building trees by **different algorithms** even where their parameters agree. 🔎 Confirm the effective `tree_method` for each version.
+
+This compounds the point above: any "matched-hyperparameter re-training" remedy must match the **library version** as well as the parameters, or it will not isolate the data effect. It also fits the per-version frozen-environment constraint (§ "Model artefacts and reproduction").
+
+## ✅ This completes the SFP inheritance chain — and it is unbroken
+
+v3's window opens in June 2023, **after v2 went live (~2022)**. So v3's training data was generated **entirely under v2's scrapping policy** — exactly the structure already confirmed one generation earlier, where v2's window (2018+) fell entirely after v1's deployment.
+
+| Generation | Training window | Policy in force during that window | Contamination |
+|---|---|---|---|
+| v2 | `ReportedDate > 2018-01-01` | v1 (deployed ~2017) | essentially total |
+| v3 | `2023-06-01 → 2026-05-01` | v2 (deployed ~2022) | **total** |
+
+> **This is a stronger statement than the thesis has been making.** The forced-label hand-off is not "partial contamination that accumulates over generations" — at the code level **each model generation trains exclusively on its predecessor's forced labels**, with no clean-label component mixed in at any step. The chain `pre-ML → v1 → v2 → v3` is unbroken, and both hand-offs are now confirmed from the production window definitions rather than inferred.
+
+## ✅ Independent corroboration: v3's window ends before the threshold break
+
+v3's window closes **2026-05-01**; v2's threshold changed from 0.872 to 0.825 at **2026-06-30 14:30 UK time**. The window therefore ends **~2 months before the break**, which **independently confirms** — from the data definition rather than from the earlier report — that **all of v3's training labels were generated under `τ = 0.872`**. Two facts obtained from different sources agree, so the "v3 is policy-homogeneous" claim can be stated with confidence.
+
+## ⚠️ `immature_date` — the maturation buffer made explicit, and a dating puzzle
+
+The end bound is named **`immature_date`**: claims reported after it are excluded because their labels have not yet matured (the outcome is not final). This is the generic "~1–2 months excluded from training" rule (§ "Training Process") appearing as a concrete constant — and it is an **improvement over v2**, whose window as read shows no comparable upper bound. 🔎 Confirm whether v2 had a maturation exclusion elsewhere; if not, v2's most recent training rows carried immature labels, which is an independent source of label noise in v2 that v3 corrected.
+
+> **⚠️ Dating discrepancy — needs resolving, because it is load-bearing.** This document records v3 as **"attempted 2025"**. But a maturation buffer of the documented 1–2 months against `DATA_END_DATE = 2026-05-01` implies the run happened around **mid-2026**, not 2025. Three readings: (a) v3 was **re-attempted in 2026** and the 2025 date refers to an earlier attempt; (b) there have been **multiple v3 attempts**; (c) the constants were updated in the repo without a corresponding retraining run. This matters because "v3 was attempted, recall collapsed at precision ≥ 0.985" is a load-bearing fact in the SFP narrative — **which attempt that finding came from changes what it is evidence about.** 🔎 Confirm the actual v3 training run date(s) and which one produced the recall-collapse result.
+
+## Date columns across versions
+
+| Version | Date column | Meaning |
+|---|---|---|
+| v1 | `lossdate` | accident date |
+| v2 | `ReportedDate` | notification date |
+| v3 | `ReportedDate_CLAIM` | ✅ **same field as v2's `ReportedDate`** — renamed only (confirmed 2026-07-29) |
+
+So **v2 and v3 split on the same variable** and their windows are directly comparable. Only **v1 differs**, splitting on `lossdate` (accident date) rather than notification date — the two are separated by the reporting lag, so v1's boundaries are not directly comparable with v2's or v3's.
+
+## ⚠️ v2's and v3's training windows do NOT overlap — a ~2-year gap between them
+
+v2 was trained in 2021 on data from 2018-01; v3's window opens 2023-06-01. **The two training windows are disjoint, separated by roughly two years.**
+
+This bears directly on the **SHAP–DiD design, which is specified on the v2a → v3a pair** (chosen because parallel trends visibly fails across the pre-ML → v1 era boundary). The gap is not empty of events — it spans the **2021–2022 UK used-vehicle price surge**, which is not a neutral background shift for this problem: a vehicle is a total loss when repair cost exceeds a fraction of its market value, so a sharp rise in market values **mechanically reduces the total-loss rate** at unchanged damage severity. Parts costs and repair-labour inflation over the same period push the other way.
+
+> 🔎 **Check this against the actual DiD specification before relying on the v2a → v3a estimate.** The concern is not automatically fatal — the SHAP–DiD compares attribution concentration across contaminated/clean partitions, which is not the same object as a raw outcome trend, and the estimator may be computed on a common evaluation set rather than on the disjoint training windows. But the two versions learned from economically different eras with a two-year unobserved gap between them, and the design's justification rests on parallel trends holding for **this** pair. Establish explicitly which quantities are compared over which time support, and whether the gap enters. Note this is now the **second** structural threat to that pair, alongside the `reg_alpha` regularisation confound (§ "Model v2").
+
+## Window lengths across versions
+
+| Version | Window | Span |
+|---|---|---|
+| v1 | `lossdate ≥ 2016-01-01`, train `< 2017-04-01` | ~1 yr 3 mo (training portion) |
+| v2 | `ReportedDate > 2018-01-01`, trained 2021 | ~3 yr 4 mo |
+| v3 | `2023-06-01 → 2026-05-01` | 2 yr 11 mo |
+
+v2 and v3 are comparable in span; v1 trained on markedly less history. v3's start date also implements the previously-noted intent to **drop the pre-COVID period** — now confirmed as an explicit constant rather than an approximate description.
+
+> **Open items for v3.** *Highest value first:* (1) **which split produced the recall-collapse figure** — in-period Test or OOT (changes how much weight the finding carries, see above); (2) **v3's hyperparameters**, a blocking prerequisite for the SHAP-concentration design (§ "Model v2", `reg_alpha` confound); (3) the training run date(s), given the 2025-vs-2026 discrepancy above.
+> (4) **what `Fttl` actually means** — the decision or the outcome (see above); if it follows v1's `total_loss ∨ fast_track` construction, P1 is written into the label definition itself.
+> *Remaining:* (5) realised split sizes; (6) vehicles-per-claim distribution (decides whether the shuffle needs grouping); (7) whether stratification is applied elsewhere; (8) whether the `cc_fttl` exclusion applies; (9) cleaning exclusions; (10) runtime environment; (11) feature set; (12) whether v3's training data still exists. *(Decision-rule form and threshold now ✅ confirmed.)*
+
+
+# Cross-Version Dataset Summary (v1–v3)
+
+Consolidated view of each version's train / test / validation / OOT splits — sizes and periods.
+**v1 is real (confirmed 2026-07-28); v2 and v3 are placeholder templates awaiting the real numbers.**
+
+> **Reading notes.** (1) The **split *scheme* differs by version, and so does the splitting variable** —
+> v1 uses **`lossdate`** cut-offs with a non-OOT random Test plus two date-bounded validation sets (see
+> "Model v1 — Actual Data Split"); v2 uses **`ReportedDate`** with a proportional head/tail split (see
+> "Model v2"); v3's scheme is **unconfirmed**. (2) **The split names are inverted between v1 and v2** —
+> rows below are therefore labelled by **role**, with each version's own name in brackets. (3) The
+> v1 sizes below are the **raw `lossdate`-split counts *before* the `cc_fttl` exclusion**; post-exclusion
+> counts (Train 173,758 · Test 43,471 · Val1 35,254 · Val2 51,189) are in the v1 section above.
+
+| Version | Role *(version's own name)* | Condition / window | Size | Split type / OOT? |
+|---|---|---|---:|---|
+| **v1** | Train *(Train)* | `lossdate < 2017-04-01`, then 80% | 178,435 | — |
+| **v1** | In-period holdout *(**Test**)* | random split from Train (80/20, `random_state=0`) | 44,609 | Random (non-stratified); **not OOT** |
+| **v1** | Temporal holdout 1 *(Val1)* | `2017-04-01 ≤ lossdate < 2017-06-30` | 36,049 | Temporal (OOT, ~3 months) |
+| **v1** | Temporal holdout 2 *(Val2)* | `lossdate ≥ 2017-06-30` | 52,498 | Temporal (OOT, longer horizon) |
+| **v2** | Train *(Train)* | 80% of `head(⌊0.8n⌋)` of `ReportedDate > 2018-01-01`, sorted | 🔎 TBD | Random, **stratified on target**; `random_state` 🔎 |
+| **v2** | In-period holdout *(**Validation**)* | remaining 20% of the same `head(⌊0.8n⌋)` pool | 🔎 TBD | Random, **stratified**; **not OOT** |
+| **v2** | Temporal holdout *(**Test**)* | `tail(⌊0.2n⌋)` **then** filtered to `ReportedDate > 2019-12-01` | 🔎 TBD — **< 20%**, realised size only | Temporal (OOT) |
+| **v3** | Train *(Train)* | 80% of the shuffled `ReportedDate_CLAIM < 2025-12-01` pool | 🔎 TBD | Random shuffle (`seed=123`), **not stratified** |
+| **v3** | In-period holdout *(**Test**)* | first 20% of the same shuffled pool | 🔎 TBD | Random; **not OOT** |
+| **v3** | Temporal holdout *(**OOT**)* | `2025-12-01 ≤ ReportedDate_CLAIM < 2026-05-01` | 🔎 TBD | Temporal (OOT, **5 months**) |
+
+**v2 window:** `ReportedDate > 2018-01-01` (strict), minus all rows with `ReportedDate == 2020-08-24`. ⚠️ The v2 Test size **cannot be derived as 20% of n** — the post-hoc date filter shrinks it by an unrecorded amount, and rows caught between `head(⌊0.8n⌋)` and that filter are dropped from every split. Report realised sizes only.
+
+**v1 date boundaries:** `EndTrainDate = 2017-04-01`, `EndValidationDate = 2017-06-30` (both on `lossdate`). Source extract shape `(311,591 × 198)`; splits sum to 311,591 (no corrupted-row drop in v1). v2/v3 boundaries: 🔎 TBD.
+
+**✅ v2 cleaning detail — confirmed 2026-07-29.** v2's pipeline drops rows with `ReportedDate == 2020-08-24` as corrupted. This belongs to **v2**, not v1 (open item now closed). ⚠️ Because the filter is an equality test on the date, it removes **every claim reported that day**, not a single record. 🔎 Still TBD: v2's raw extract shape, the row count dropped, and whether any other corrupted rows are removed.
+
+> **⚠️ The table above is keyed on `lossdate`, which is v1's splitting variable only.** v2 splits on **`ReportedDate`** (see § "Model v2"). The two are separated by the reporting lag, so **v1 and v2 window boundaries are not directly comparable** and must not be plotted on a common axis without first converting or quantifying the lag.
+
+## Split scheme by version
+
+| | **v1** | **v2** | **v3** |
+|---|---|---|---|
+| Splitting variable | `lossdate` (accident date) | **`ReportedDate`** | `ReportedDate_CLAIM` — **same field as v2's**, renamed |
+| How the OOT boundary is set | **explicit cut-off dates** (`EndTrainDate`, `EndValidationDate`) | **proportional** `tail(⌊0.2n⌋)`, then date-filtered | **explicit date** (`≥ 2025-12-01`) |
+| Data window | `lossdate ≥ 2016-01-01` | `ReportedDate > 2018-01-01` | `2023-06-01 → 2026-05-01` |
+| Cleaning exclusions | `cc_fttl` rule-flagged rows (~2.54%, all splits) | all rows with `ReportedDate == 2020-08-24` | 🔎 TBD |
+| Maturation buffer? | 🔎 not visible | 🔎 not visible | ✅ **Yes** — `immature_date` |
+| In-period split stratified? | ❌ **No** — plain random | ✅ **Yes** — `stratify=target` | ❌ **No** — plain shuffle |
+| Genuine OOT holdout? | Yes — named **Val1 / Val2** | Yes — named **Test** | Yes — named **OOT** |
+| Headline "Test" set is OOT? | ❌ **No** — in-period | ✅ **Yes** | ❌ **No** — in-period |
+| Realised sizes derivable from n? | Yes | ❌ **No** — post-hoc filter shrinks OOT silently | ✅ Yes — head/tail exactly complementary |
+| Library | pandas 0.22 / Py 3.5.2 | pandas | **Polars** |
+| Split seed | `random_state=0` | 🔎 TBD (model: 42) | `seed=123` |
+| Training data still exists? | ❌ **Destroyed** (retention) | ✅ **Yes** (`Z:` drive) | 🔎 TBD |
+
+**Overall, v3's split design is the soundest of the three** — explicit OOT date, a ~5-month holdout matching the documented methodology, exactly complementary head/tail, an explicit maturation buffer, and unambiguous naming. Its two weaknesses are the **loss of v2's stratification** and the **claim-level leakage exposure** created by shuffling (see § "Model v3").
+
+## Model configuration by version — hyperparameters, package versions, training data
+
+Consolidated reference. **Decimals are exactly as supplied from the real code; trailing `…` marks values truncated at source.** Blank `—` means the parameter is not set in that version's call (so the library default applies); 🔎 means not yet confirmed.
+
+### Environment & training data
+
+| | **v1** | **v2** | **v3** |
+|---|---|---|---|
+| **xgboost version** | 🔎 — pre-1.0 (uses deprecated `silent=`) | **1.4.2** | **3.2.0** |
+| Python / dataframe stack | Python 3.5.2, pandas 0.22.0 | pandas 🔎 | **Polars** |
+| Model trained | ~2017 | **2021** | 🔎 (2025 or 2026 — unresolved) |
+| Deployed? | Yes, superseded | **Yes — currently live** | ❌ Never |
+| Training window | `lossdate < 2017-04-01` | `ReportedDate > 2018-01-01` | `2023-06-01 → 2026-05-01` |
+| Window span | ~1 yr 3 mo | ~3 yr 4 mo | 2 yr 11 mo |
+| Split variable | `lossdate` (accident date) | `ReportedDate` | `ReportedDate_CLAIM` *(= v2's field, renamed)* |
+| Label source | `pre_ml_label` (human era) | v1 production log | v2 production log |
+| Contamination | partial (human forced labels) | **essentially total** | **total** |
+| Rows (raw extract) | 311,591 × 198 | 🔎 | 🔎 |
+| In-period split stratified? | ❌ No | ✅ Yes (`stratify=target`) | ❌ No |
+| Maturation buffer | 🔎 not visible | 🔎 not visible | ✅ `immature_date` |
+| Training data still exists? | ❌ Destroyed | ✅ Yes (`Z:`) | 🔎 |
+
+### Hyperparameters
+
+| Parameter | **v1** | **v2** | **v3** |
+|---|---|---|---|
+| **target column** | `target` = `veh_total_loss ∨ veh_fast_track` ✅ | **`veh_total_loss`** alone ✅ | `Fttl` ⚠️ *(meaning ambiguous)* |
+| **scrap threshold** | 0.75 immobile / 0.85 mobile | 0.872 → **0.825** (≈2026-07) | **0.984** @ prec 0.985; 0.970 @ prec 0.97 |
+| `objective` | — *(implied multiclass)* | `binary:logistic` | 🔎 |
+| `eval_metric` | `mlogloss` | `auc` | 🔎 |
+| `n_estimators` | — *(default)* | 450 | **802** |
+| `max_depth` | — *(default)* | **10** | **3** |
+| `max_leaves` | — | — | **18** |
+| `grow_policy` | — | `depthwise` | `depthwise` |
+| `learning_rate` | — *(default)* | **0.0887667…** ⚠️ | **0.09973689…** |
+| `eta` *(alias of above)* | — | **0.147686…** ⚠️ clash | — |
+| `gamma` | — *(default 0)* | **15.0** | **0.0004847861…** |
+| `min_child_weight` | — *(default 1)* | 1 | **44** |
+| `max_delta_step` | — | 10 | **61** |
+| `subsample` | — *(default 1.0)* | 1.0 | **0.980460…** |
+| `colsample_bytree` | — *(default 1.0)* | 0.6 | **0.887008…** |
+| **`reg_alpha` (L1)** | — *(default 0)* | **20.0** | **— ⇒ 0** 🔎 |
+| **`reg_lambda` (L2)** | — *(default 1.0)* | **0.0123626…** | **1.182373785…** |
+| `scale_pos_weight` | — *(default 1)* | 4.5 | **5.552301…** |
+| `random_state` / seed | `10**9` (model), `0` (split) | 42 | **123** |
+| `n_jobs` | 20 | −1 | −1 |
+| *(other)* | `silent=False`, `eval_set` passed to constructor ⚠️ | — | — |
+
+**How to read this table.** v1 sets almost nothing — it is essentially stock defaults with a metric, seed and thread count. v2 and v3 are both clearly the output of automated hyperparameter searches (the long decimals), but they **regularise by opposite mechanisms**: v2 leans on **penalty terms** (`reg_alpha=20`, `gamma=15`, L2 switched off) with deep trees; v3 leans on **tree structure** (`max_depth=3`, `max_leaves=18`, `min_child_weight=44`) with penalties near default. ⚠️ Because *no* adjacent pair of versions shares a configuration, **no cross-version comparison of feature-importance concentration is clean** — see § "Model v3" for what this does to the SHAP–DiD design.
+
+## Decision rule by version
+
+Split *sizes* are still TBD for v2/v3, but the **decision rules** are now partly confirmed and differ in form — worth tabulating separately so the difference is not lost inside the size table above.
+
+| Version | Decision rule | Arity | Confirmed? |
+|---|---|---|---|
+| **v1** | `D = 1[s > 0.75]` if immobile; `D = 1[s > 0.85]` if mobile | **two** cutoffs, segmented by vehicle mobility | ✅ 2026-07-28 |
+| **v2** (→ 2026-06-30 14:30 UK) | `D = 1[s > 0.872]` | **one** global cutoff | ✅ 2026-07-29 (`score.py`); break instant ✅ 2026-07-31 |
+| **v2** (2026-06-30 14:30 UK →) | `D = 1[s > 0.825]` | **one** global cutoff | ✅ 2026-07-29 (`score.py`); break instant ✅ 2026-07-31 |
+| **v3** | `D = 1[s > 0.984]` at precision 0.985 (`> 0.970` at precision 0.97) | **one** global cutoff | ✅ 2026-07-29 — but **never deployed** |
+
+**Where garage-verified outcomes exist above a scrap cutoff** (i.e. where the "zero garage rows above τ" premise breaks):
+
+| Version | Overlap band | Source of overlap | Confound |
+|---|---|---|---|
+| **v1** | `(0.75, 0.85]` | **cross-sectional** — mobile vehicles are garaged where immobile ones are scrapped | **mobility** (observed → adjustable) |
+| **v2** | `(0.825, 0.872]` | **temporal** — pre-change claims are garaged where post-change ones are scrapped | **calendar time** (not a single observed covariate → needs a parallel-trends-style assumption) |
+
+Both bands are **confounded, not random**, so neither restores clean positivity — but both are exploitable, and both mean the premise "no garage-verified outcome exists above the scrap cutoff" is **too strong as stated**. v1's band is the better-identified of the two (its confounder is measured); v2's is confounded by time and, on the post-change side, spans only ~4 weeks.
+
+
 # Training Process (Insurance Company.-aligned)
 
 ## Data & Model Timeline
@@ -140,7 +980,7 @@ Full dataset
 |---|---|---|---|---|
 | **v1** | Pre-ML era production log | `pre_ml_label` (human handler/engineer decisions) | Unknown — we define this for the synthetic simulation | ✓ Deployed (dates TBC) |
 | **v2** *(currently live)* | v1 production log only | `model_v1_observed_outcome` | All v1-generated data, pre-2022 only; `pre_ml_label` already disposed at retraining time | ✓ Currently active |
-| **v3** *(not deployed)* | v2 production log | `model_v2_observed_outcome` | Attempted 2025; tried 2023+ data only (dropped pre-COVID period) — exact window uncertain | ✗ Recall collapsed when precision held at ≥ 0.985 |
+| **v3** *(not deployed)* | v2 production log | `model_v2_observed_outcome` | ✅ Window confirmed: `2023-06-01 < ReportedDate_CLAIM < 2026-05-01` (drops the pre-COVID period, as previously described). ⚠️ "Attempted 2025" conflicts with an end date of 2026-05-01 — see § "Model v3" | ✗ Recall collapsed when precision held at ≥ 0.985 |
 
 > The "drop pre-COVID data" consideration came from the v3 retraining attempt — it was not part of v2's training design.
 
@@ -229,6 +1069,10 @@ model_v2b.fit(X_2020_2024, y=combined_label)
 Both variants are scored on all rows and saved with their own columns
 (`model_v2a_score`, `model_v2a_decision`, `model_v2b_score`, `model_v2b_decision`).
 **v2a represents the real Insurance Company. v2; v2b is a synthetic counterfactual for comparison.**
+
+> **⚠️ The row-year ranges above are the SYNTHETIC generator's timeline, not the real one.** The real v2 window is **`ReportedDate > 2018-01-01`, with the model trained in 2021** (§ "Model v2 — Actual Split, Scoring & Decision Rule"). Do not quote "2022–2024" as v2's real training window.
+>
+> **✅ The claim in this section is now confirmed and is in fact stronger than stated.** Because v2's window opens in 2018 — entirely after v1's training window (`lossdate < 2017-04-01`) and after v1's deployment — essentially **all** of v2's training data was generated while v1 was already making scrap decisions. "Entirely contaminated by the SFP loop" is not an approximation here; it is close to literally true.
 
 ### Model v3 — refresh attempted but not deployed
 
