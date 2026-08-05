@@ -141,7 +141,7 @@ Two consequences: **(i)** because **Test and Validation are also filtered**, the
 
 #### Date boundaries (all on `lossdate`)
 
-`EndTrainDate = 2017-04-01`, `EndValidationDate = 2017-06-30`.
+`EndTrainDate = 2017-04-01`, `EndValidationDate = 2017-06-30`; **dataset max `lossdate` = 2018-02-09** ✅ (confirmed 2026-08-04 — full extract period 2016-01-01 → 2018-02-09).
 
 #### The four splits
 
@@ -150,11 +150,11 @@ Two consequences: **(i)** because **Test and Validation are also filtered**, the
 | **Train** | `lossdate < 2017-04-01`, then 80% of that pool | **178,435** | `train_test_split(..., test_size=0.2, random_state=0)` | No |
 | **Test** | remaining 20% of the same `lossdate < 2017-04-01` pool | **44,609** | same `train_test_split` call | **No — in-period random split** |
 | **Validation set 1** | `2017-04-01 ≤ lossdate < 2017-06-30` | **36,049** | date filter | Yes (near-term, ~3 months) |
-| **Validation set 2** | `lossdate ≥ 2017-06-30` | **52,498** | date filter | Yes (longer horizon) |
+| **Validation set 2** | `2017-06-30 ≤ lossdate ≤ 2018-02-09` (dataset end) | **52,498** | date filter | Yes (longer horizon, ~7.5 months) |
 
 > The **Size** column is the raw `lossdate`-split count **before** the `cc_fttl` exclusion above. Post-exclusion: **Train 173,758 · Test 43,471 · Val1 35,254 · Val2 51,189** (311,591 → 303,672). See "Training-set exclusion — centre-flagged FTTL claims" above.
 
-**Test vs Val1 vs Val2.** Test is carved from the *training period* by a random split → shares the train window → **not** out-of-time (in-distribution only). Val1/Val2 are **temporal holdouts** defined by `lossdate` cut-offs (data later than training) — these play the generalisation-testing role that §1.4's generic "OOT" block describes. Val1 = near-term future (~3 months post cut-off); Val2 = longer horizon (≥ 2017-06-30).
+**Test vs Val1 vs Val2.** Test is carved from the *training period* by a random split → shares the train window → **not** out-of-time (in-distribution only). Val1/Val2 are **temporal holdouts** defined by `lossdate` cut-offs (data later than training) — these play the generalisation-testing role that §1.4's generic "OOT" block describes. Val1 = near-term future (~3 months post cut-off); Val2 = longer horizon (2017-06-30 → 2018-02-09, the dataset end).
 
 > **⚠️ Test is NOT stratified.** The call is `train_test_split(train_test, train_test['target'], test_size=0.2, random_state=0)` — **no `stratify=` argument**. Passing the label as the second positional array does **not** trigger stratification (scikit-learn stratifies only when `stratify=` is set explicitly); this is a plain random split. With total-loss as the minority class, Train and Test can carry **slightly different class balances** — a real caveat under precision ≥ 0.985, where the Test positive count drives the precision estimate's stability. `random_state=0` fixes reproducibility only, not class balance. **This is v1-specific: v2 *does* pass `stratify=` explicitly** (§1.4b), so the caveat does not carry across versions — one more reason v1's and v2's in-period holdouts are not like-for-like.
 
@@ -177,9 +177,9 @@ df.loc[(df[target_fttl] == 1) & (df[target_tl] == 0), 'target'] = 1   # fast-tra
 | 1 | 0 | **1** ⚠️ | **fast-tracked but no total-loss label → forced to 1** |
 | 1 | 1 | **1** | fast-tracked and total loss → positive |
 
-`target` = "**total loss OR fast-tracked**". The third row is the **forced/contaminated positive at row level**: a fast-tracked car never reaches a garage, so `veh_total_loss` stays 0 (unverified), yet the construction sets `target = 1`. This is **§2.2's label-generation mechanism made concrete in the real v1 label** — fast-track routing itself becomes a proxy positive, i.e. $\tilde{Y}_i^{v1}=1$ whenever $D_i^{v1}=1$ regardless of true $Y_i$.
+`target` = "**total loss OR fast-tracked**" by formula. **✅ Confirmed 2026-08-04: the recorded `veh_total_loss` is itself already 1 for fast-tracked vehicles** — the recording process treats fast-tracking as settling the total-loss question with no garage visit (an engineer-confirmed scrap also records 1). The forced positive therefore enters through the **data**, before any formula runs: the truth table's third row is a **defensive safeguard that rarely-to-never fires**, and the effective target is `veh_total_loss` alone. This is **§2.2's label-generation mechanism made concrete in the real v1 label** — fast-track routing itself becomes a recorded positive, i.e. $\tilde{Y}_i^{v1}=1$ whenever $D_i^{v1}=1$ regardless of true $Y_i$.
 
-> **Open item — why `fast_track = 1 & total_loss = 0` occurs is unconfirmed.** Candidate mechanisms: (a) the two fields come from different processes and a fast-tracked car skips the garage step that would set `veh_total_loss`; (b) label-maturation timing (total-loss field not finalised at snapshot); (c) fast-track later reversed but flag persists. To be confirmed against the real data before the forced-label reading is treated as fully settled.
+> ✅ **Resolved 2026-08-04 (supersedes the open item on why `fast_track = 1 & total_loss = 0` occurs).** It does not occur as a stable data state: recorded `total_loss` is 1 whenever the vehicle is fast-tracked; v1's disjunct guards against transient states (e.g. maturation at snapshot). Consequence: **the same forced-label semantics carry into every version's target** (v2: `veh_total_loss`; v3: `Fttl` = `veh_total_loss` renamed) — **P1 holds for all three versions through the data.**
 
 #### v1 model training call — real XGBoost configuration
 
@@ -295,6 +295,8 @@ v1 splits on **`lossdate`** (accident date); v2 on **`ReportedDate`** (notificat
 
 The cutoff filter is strict (`>`), so everything on or before 2018-01-01 is removed: **v2's window is 2018-01-02 onward.**
 
+> ✅ **Realised windows confirmed 2026-08-04:** in-period pool (Train + Validation) **2018-01-02 → 2019-12-02**; OOT block (v2's "Test") **2019-12-02 → 2020-09-30**. v2's data ends **2020-09-30** — the window does *not* extend to the 2021 training date, and the training pool closes **before COVID-19**.
+
 > **⚠️ This window lies entirely *after* v1's.** v1 trained on `lossdate < 2017-04-01` (§1.4a). So essentially **all** of v2's training data was generated while **v1 was already in production**, i.e. v2's labels are v1-influenced across the board. The SFP hand-off is therefore **not a partial contamination of v2's training set — it is close to total.** This is a code-level confirmation of the "v2a trained on `model_v1_observed_outcome`" narrative (§1.5, §2.3), and it is **stronger** than that narrative previously claimed. 🔎 Confirm v1's actual deployment date to state "all" rather than "essentially all".
 
 ##### ✅ The corrupted-record exclusion — confirmed v2, and it drops a whole DAY
@@ -302,14 +304,14 @@ The cutoff filter is strict (`>`), so everything on or before 2018-01-01 is remo
 `dataset[dataset['ReportedDate'] != '2020-08-24']`.
 
 - ✅ **Closes the open item** carried since §1.4a: the exclusion belongs to **v2**, not v1.
-- ⚠️ **It is not "a corrupted record".** The filter is an equality test on `ReportedDate`, so it removes **every claim reported on 2020-08-24** — potentially a full day, not one row. Both this document and `README.md` previously described it as a single record. 🔎 **Count the rows dropped.** A whole-day hole in the middle of the series is non-trivial, and depending on where 2020-08-24 sits relative to the 80th percentile of `ReportedDate` it may fall inside the OOT block.
+- ⚠️ **It is not "a corrupted record".** The filter is an equality test on `ReportedDate`, so it removes **every claim reported on 2020-08-24** — potentially a full day, not one row. Both this document and `README.md` previously described it as a single record. 🔎 **Count the rows dropped.** A whole-day hole in the middle of the series is non-trivial — and with the realised windows confirmed (2026-08-04), **2020-08-24 falls inside the OOT block** (2019-12-02 → 2020-09-30), i.e. inside v2's headline temporal holdout.
 
 ##### ⚠️ A silent data-loss region between the train pool and the OOT block
 
 OOT is taken as `tail(20%)` and **then** filtered to `ReportedDate > 2019-12-01`. Rows in the tail 20% but reported on or before 2019-12-01 are **not** in `head(80%)` (→ excluded from Train and Validation) **and** are filtered out of the tail (→ excluded from Test). **They are dropped from the run entirely, unrecorded.** Consequences:
 
 - **The nominal 80/20 is not the realised split.** The OOT/Test block is **smaller than 20%** of the post-cutoff data by an unrecorded amount. Report *realised* sizes; never quote nominal fractions.
-- 🔎 **One number decides whether this matters: the 80th-percentile `ReportedDate`.** Later than 2019-12-01 → the filter is non-binding and nothing is lost; earlier → the loss is real and potentially large. Compute this first.
+- ✅ **Resolved in effect (2026-08-04).** The realised OOT block starts **2019-12-02**, immediately after the hard-coded filter date (2019-12-01), so the 80th-percentile `ReportedDate` sits just above the filter: it was **non-binding (or marginal)** and the silent-loss region is empty or near-empty *for this run*. The reproducibility caveat below still applies to any re-run on refreshed data.
 - **Reproducibility:** a hard-coded date applied to a *proportional* tail. Re-running on extended data moves the tail later, changing whether the filter binds — **the split is not stable across re-runs**, so a refresh will not reproduce the original partition.
 
 *(Minor: `⌊0.8n⌋ + ⌊0.2n⌋ ≤ n`, so head and tail never overlap — no leakage between the train/validation pool and the OOT block; they may leave one row assigned to neither.)*
@@ -333,22 +335,18 @@ v2 trains on the raw **`veh_total_loss`** flag, with no derivation on top. Compa
 | | v1 | v2 |
 |---|---|---|
 | Target | `veh_total_loss ∨ veh_fast_track` | **`veh_total_loss`** |
-| Forced label in the **formula**? | ✅ yes — the `fast_track` disjunct | ❌ **no** |
+| Forced label in the **formula**? | ✅ yes — the `fast_track` disjunct (a safeguard) | ❌ no |
+| Forced label in the **data**? | ✅ **yes** — recorded `total_loss` = 1 on fast-track | ✅ **yes — same recording semantics** |
 
-**This narrows an earlier claim.** "The forced label is a property of the real label, not an artefact of the synthetic DGP" holds **for v1**, whose formula sets `target = 1` for a fast-tracked but unverified vehicle. **v2 does not do this**, so P1 is not written into every version's target definition; §2.2/§2.3 have been corrected accordingly.
+**The formula difference is presentational, not substantive.** ✅ **Resolved 2026-08-04:** the recorded `veh_total_loss` is **set to 1 for fast-tracked vehicles** (no garage visit) under the same recording logic in both eras — v1's disjunct was a safeguard, not the contamination channel.
 
-##### 🔎 The question this raises: what is `veh_total_loss` for a scrapped car?
+##### ✅ Resolved (2026-08-04): `veh_total_loss` = 1 for a scrapped car — P1 holds for v2 through the data
 
-Dropping the disjunct does **not** make v2's label clean — it moves where contamination can enter. Everything turns on one fact:
+The question previously carried here — what value `veh_total_loss` holds for a vehicle fast-tracked to scrap — resolves to the former reading **(a): recorded as 1**; scrapping settles the total-loss question in the data. Consequences:
 
-> **For a vehicle v1 fast-tracked to scrap in 2018–2021, what value does `veh_total_loss` carry?**
-
-- **(a) Recorded as `1`** — scrapping settles the total-loss question. Then **P1 still holds for v2**, but in the **data** rather than the formula. The SFP mechanism is unchanged; only its location moves.
-- **(b) Stays `0`** — `veh_total_loss` genuinely requires garage confirmation, which a scrapped car never gets. Then v2 was trained to call scrapped vehicles **negative** — a *different* pathology that would substantially change the analysis.
-
-**(a) is more plausible operationally but is not confirmed.** Note v1's own data made **(b)** possible in its era: `fast_track = 1 & total_loss = 0` is exactly what v1's disjunct existed to patch, so in v1's window a fast-tracked vehicle did *not* automatically carry `total_loss = 1`. Whether that changed by v2's window is what needs checking. A third possibility — such rows null and dropped — would be a selection effect rather than a forced label.
-
-> 🔎 **The check:** cross-tabulate `veh_total_loss` against the fast-track/scrap flag on v2's training data (which survives, unlike v1's — §1.4b). The `fast_track = 1` row answers it outright. **This is now the highest-value open item for v2** — it determines whether P1 applies to the currently-live model, and by what route.
+- **P1 holds for the currently-live model (v2)**, and for v3 (`Fttl` = `veh_total_loss` renamed — §1.4c). It lives in the **data-recording process**, not in any label formula; the SFP mechanism is unchanged, only its location.
+- The alternative (b) — scrapped cars recorded 0 — is **excluded**, as is the null-and-dropped selection reading.
+- The cross-tab (`veh_total_loss` × fast-track flag on v2's surviving data) is no longer a blocking open item; it is kept only as a cheap **regression test** of this confirmation.
 
 #### v2 model training call — real XGBoost configuration (**xgboost 1.4.2**, model trained **2021**)
 
@@ -424,9 +422,9 @@ Regularisation is strikingly asymmetric: **L1 `reg_alpha = 20.0`** (default 0 �
 
 ##### ⚠️ 6. A five-year-old model: trained 2021, deployed ~2022, still live in 2026
 
-- **v2 has scored live claims for ~4–5 years without retraining**, on a window opening in January 2018 — 2026 claims scored from 2018–2021 patterns. Drift (vehicle values, parts costs, repair economics, channel mix) is unaddressed and the SFP loop has compounded throughout. This sharpens why v3's failure matters: the only attempted refresh did not ship.
-- **⚠️ The training window spans COVID-19.** UK motor claim volumes collapsed during 2020 lockdowns and the incident mix changed. Two consequences: **(a)** v2 learned partly from an anomalous period; **(b)** more subtly, **the proportional `head`/`tail` split interacts badly with non-uniform volume** — 2020 contributes far fewer rows, so the trailing 20% *of rows* reaches **further back in calendar time** than uniform volume would imply. That makes the hard-coded `ReportedDate > 2019-12-01` filter **more likely to bind**, hence the silent data-loss region above **more likely non-empty**. 🔎 Raises the priority of computing the 80th-percentile `ReportedDate`.
-- 🔎 Any earlier placeholder describing v2's window as "≈ 2022–2024" is **wrong**: training happened in 2021, so the window ends in 2021 or earlier.
+- **v2 has scored live claims for ~4–5 years without retraining**, and its **training pool closed on 2019-12-02** (data window 2018-01-02 → 2020-09-30, tail = OOT only — ✅ 2026-08-04): 2026 claims scored from **2018–2019 patterns**, six-plus years of drift (vehicle values, parts costs, repair economics, channel mix) unaddressed, the SFP loop compounding throughout. This sharpens why v3's failure matters: the only attempted refresh did not ship.
+- **⚠️ COVID-19 sits in the OOT block, not the training pool** *(corrects the earlier "training window spans COVID" reading)*. The in-period pool ends 2019-12-02 — entirely **pre-COVID** — while the OOT block (2019-12-02 → 2020-09-30) spans the first UK lockdown. Consequences: **(a)** v2 never saw COVID-era or post-COVID claims in training at all; **(b)** v2's headline OOT figures were measured partly on an **anomalous period**, so its reported out-of-time performance is not a clean read of normal-times generalisation. *(The earlier proportional-tail volume worry is superseded — the realised windows show the date filter was non-binding.)*
+- ✅ Any earlier placeholder describing v2's window as "≈ 2022–2024" is **wrong**, and now exactly resolved: the data window ends **2020-09-30**; training happened in 2021.
 
 #### Data availability — v2's training dataset survives, v1's does not
 
@@ -519,9 +517,9 @@ This **parallels the v1 mobility band (§1.4a) exactly, but in time rather than 
 - **The post-change window is ~4.3 weeks** (2026-06-30 14:30 → 2026-07-31). Given the documented thinness of the scrapped partition, the band may be **underpowered before any modelling begins**. 🔎 Count rows in (0.825, 0.872] on each side of the break *first* and gate the analysis on that count. A date-only column forces dropping 2026-06-30 — the single most valuable day, sitting exactly on the break.
 
 > **Open items for v2.** *Threshold:* ~~(1) exact change date~~ ✅ **closed 2026-07-31 — 2026-06-30 14:30 UK local (13:30 UTC)**; (1b) **timezone + time granularity of the log's date column** — decides whether the break is cuttable intra-day and whether the boundary is 14:30 or 13:30 (new); (2) ~~one change or two~~ ✅ **at least two — 2026-02-25 16:26 confirmed**; what remains is (2b) **when the first 0.825 era began — record broken, see §1.4b-lim** and (2c) **monthly `read_off()` across v3's window** as the empirical substitute; (3) stated rationale; (4) exact column spellings; (5) row counts in (0.825, 0.872] each side of the break, **excluding 2026-06-30 if the column is date-only**.
-> *Split:* (6) the **80th-percentile `ReportedDate`** — decides whether the silent data-loss region is empty or large; (7) realised split sizes (never nominal 80/20); (8) rows dropped by the 2020-08-24 filter; (9) the train/validation split's `random_state` (`stratify=` now ✅ confirmed); (9b) **positive rate in Train / Validation / OOT Test** — a cheap drift check the stratification makes interpretable; (10) reporting-lag distribution (`ReportedDate − lossdate`) and its drift.
+> *Split:* (6) ~~the 80th-percentile `ReportedDate`~~ ✅ **resolved in effect 2026-08-04** — realised OOT starts 2019-12-02, filter non-binding; (7) realised split sizes (never nominal 80/20; windows now ✅, sizes still 🔎); (8) rows dropped by the 2020-08-24 filter (now known to sit inside the OOT block); (9) the train/validation split's `random_state` (`stratify=` now ✅ confirmed); (9b) **positive rate in Train / Validation / OOT Test** — a cheap drift check the stratification makes interpretable (note the OOT block spans COVID); (10) reporting-lag distribution (`ReportedDate − lossdate`) and its drift.
 > *Training config (⚠️ highest priority first):* (11) **which of `eta` / `learning_rate` actually took effect** — read the saved booster's config; (12) **v3's hyperparameters**, needed to know whether the SHAP-concentration comparison can run on a regularisation-matched pair; (13) whether `scale_pos_weight=4.5` was computed or tuned; (14) whether a hyperparameter search was run and what it optimised; (15) a **calibration curve on garage-verified rows**; (16) `train_test_split`'s `random_state`.
-> *Highest value of all:* (17) **cross-tab `veh_total_loss` × the fast-track/scrap flag on v2's training data** — decides whether P1 applies to the live model (§1.4b).
+> *Highest value of all:* (17) ~~cross-tab `veh_total_loss` × fast-track flag~~ ✅ **resolved 2026-08-04** — recorded `veh_total_loss` = 1 for fast-tracked vehicles, so **P1 applies to the live model through the data** (§1.4b); the cross-tab is retained only as a regression test.
 > *Still no v2 counterpart:* (18) extract SQL and raw shape; (19) whether §1.4a's `cc_fttl` exclusion applies to v2; (20) runtime environment / library pins; (21) feature set. *(Target and XGBoost config now ✅ confirmed.)*
 
 ### 1.4c Model v3 — Data Window (real, confirmed 2026-07-29)
@@ -606,28 +604,17 @@ Two smaller notes:
 
 On this rough like-for-like footing v3 is genuinely far more conservative — demanding roughly a 0.92 chance of total loss where v2 demands about 0.60. **That is the shape of the collapse:** v3 could hold the precision floor only by scrapping almost nothing. Illustrations, not calibrated estimates.
 
-##### ⚠️ What does `Fttl` mean — the decision, or the outcome?
+##### ✅ `Fttl` resolved (2026-08-04): it is `veh_total_loss` under a new name
 
-The name is ambiguous in exactly the way that matters most here:
-
-- **Reading A — the outcome:** "was this vehicle a total loss?"
-- **Reading B — the decision:** "was this vehicle fast-tracked to scrap?"
-
-**v1's target is why this is not pedantic.** v1's label is `target = veh_total_loss OR veh_fast_track` (§1.4a) — outcome and decision **deliberately merged**, which is precisely where the forced label (P1, §2.2/§2.5) enters at the level of the label *formula*.
-
-**⚠️ But v2 does NOT repeat that construction** — v2's target is **`veh_total_loss` alone**, the `∨ fast_track` term dropped (§1.4b). So the label-formula forced label is a **v1 phenomenon, not a universal one**, and any claim that P1 is written into the target definition "in every version" is **false**. What `Fttl` does is therefore genuinely open: it could follow v1 (merged), follow v2 (outcome only), or be something else.
-
-> 🔎 **How to resolve, cheapest first.** (i) Compare `Fttl`'s **base rate** against the known scrap rate and total-loss rate — whichever it matches identifies the reading. (ii) **Cross-tabulate `Fttl` against the scrap/decision column:** if `Fttl = 1` exactly whenever scrapped, it is the decision; if a scrapped vehicle can carry `Fttl = 0`, it is the outcome; if it is the OR of two fields, a v1-style pattern will show. (iii) Find v3's **target-construction code** — v1 had an explicit derivation, so v3 likely does too, and that settles it outright.
->
-> The name cannot settle it: "FTTL" (Fast-Track Total Loss) is itself the fusion of the two concepts.
+**User-confirmed from the real data: `Fttl` carries exactly the same values as `veh_total_loss`** — a rename, not a new construction (consistent with `ReportedDate` → `ReportedDate_CLAIM` in the same rewrite). The earlier decision-vs-outcome ambiguity dissolves in a specific way: the column is nominally the **outcome as recorded**, but — per the 2026-08-04 confirmation in §1.4a/§1.4b — the recorded value is **set to 1 for fast-tracked vehicles without garage verification**, so for fast-tracked rows its recorded value *is* the decision. **P1 holds for v3's target through the data, exactly as for v1 and v2.**
 
 **Cross-version status of the target definition:**
 
 | Version | Target | Status |
 |---|---|---|
-| **v1** | `target` = `veh_total_loss OR veh_fast_track` | ✅ **Full derivation confirmed** (§1.4a) |
-| **v2** | **`veh_total_loss`** — the raw flag alone | ✅ **Confirmed — and v1's `∨ fast_track` term is GONE** |
-| **v3** | `Fttl` | ⚠️ **Name only — meaning ambiguous (above)** |
+| **v1** | `target` = `veh_total_loss OR veh_fast_track` (disjunct = safeguard) | ✅ **Full derivation confirmed (§1.4a); forced 1s already in the recorded column** |
+| **v2** | **`veh_total_loss`** — the raw flag alone | ✅ **Confirmed — carries the forced 1s in the data (§1.4b)** |
+| **v3** | `Fttl` **= `veh_total_loss` renamed** | ✅ **Confirmed 2026-08-04 — identical values; carries the forced 1s** |
 
 #### v3 model training call — real XGBoost configuration (**xgboost 3.2.0**)
 
@@ -695,10 +682,10 @@ v3's window opens June 2023, **after v2 went live (~2022)**, so v3's training da
 
 | Generation | Training window | Policy in force | Contamination |
 |---|---|---|---|
-| v2 | `ReportedDate > 2018-01-01` | v1 (deployed ~2017) | essentially total |
+| v2 | `2018-01-02 → 2019-12-02` (pool; OOT → 2020-09-30) | v1 (deployed ~2017) | essentially total |
 | v3 | `2023-06-01 → 2026-05-01` | v2 (deployed ~2022) | **total** |
 
-> **Stronger than §1.5/§2.3 have been claiming.** The forced-label hand-off is not "partial contamination accumulating over generations" — at code level **each generation trains exclusively on its predecessor's forced labels**, with no clean-label component at any step. The chain `pre-ML → v1 → v2 → v3` is unbroken, and both hand-offs are now confirmed from production window definitions rather than inferred.
+> **Stronger than §1.5/§2.3 have been claiming.** The forced-label hand-off is not "partial contamination accumulating over generations" — at code level **each generation trains exclusively on its predecessor's forced labels**, with no clean-label component at any step. The chain `pre-ML → v1 → v2 → v3` is unbroken, and both hand-offs are confirmed from production window definitions — and, as of 2026-08-04, at the **label level** as well: the recorded `veh_total_loss` / `Fttl` is 1 for fast-tracked vehicles in every era, so the forced value demonstrably sits in each generation's target data.
 
 #### ✅ Independent corroboration: v3's window ends before the threshold break
 
@@ -720,9 +707,9 @@ The end bound is named **`immature_date`**: claims reported after it are exclude
 
 So **v2 and v3 split on the same variable** and their windows are directly comparable. Only **v1 differs**, splitting on `lossdate` (accident date) rather than notification date — the two are separated by the reporting lag, so v1's boundaries are not directly comparable with v2's or v3's.
 
-#### ⚠️ v2's and v3's training windows do NOT overlap — a ~2-year gap
+#### ⚠️ v2's and v3's training windows do NOT overlap — a ~2¾-year gap
 
-v2 was trained in 2021 on data from 2018-01; v3's window opens 2023-06-01. **The windows are disjoint, ~2 years apart.**
+v2's data ends **2020-09-30** (training pool already on **2019-12-02** — ✅ 2026-08-04); v3's window opens **2023-06-01**. **The windows are disjoint: ~2 years 8 months from v2's last data to v3's first, ~3.5 years from the close of v2's training pool.** The gap contains both the COVID period and the price surge below.
 
 This bears on the **SHAP–DiD design, specified on the v2a → v3a pair** (chosen because parallel trends visibly fails across the pre-ML → v1 boundary). The gap spans the **2021–2022 UK used-vehicle price surge**, which is not neutral here: a vehicle is a total loss when repair cost exceeds a fraction of market value, so rising market values **mechanically reduce the total-loss rate** at unchanged damage severity, while parts and labour inflation push the other way.
 
@@ -732,14 +719,14 @@ This bears on the **SHAP–DiD design, specified on the v2a → v3a pair** (chos
 
 | Version | Window | Span |
 |---|---|---|
-| v1 | `lossdate ≥ 2016-01-01`, train `< 2017-04-01` | ~1 yr 3 mo (training portion) |
-| v2 | `ReportedDate > 2018-01-01`, trained 2021 | ~3 yr 4 mo |
+| v1 | `2016-01-01 → 2018-02-09` (full extract); train `< 2017-04-01` | ~1 yr 3 mo (training portion) / 2 yr 1 mo (full) |
+| v2 | `2018-01-02 → 2020-09-30` (data); in-period pool `→ 2019-12-02`; trained 2021 | **1 yr 11 mo (pool)** / 2 yr 9 mo incl. OOT |
 | v3 | `2023-06-01 → 2026-05-01` | 2 yr 11 mo |
 
-v2 and v3 are comparable in span; v1 trained on markedly less history. v3's start date also implements the previously-noted intent to **drop the pre-COVID period** — now an explicit constant rather than an approximate description.
+v3's window is the longest; v2's training pool is under two years (the earlier "~3 yr 4 mo" figure counted up to the 2021 training date and is superseded); v1's training portion is ~1¼ years. v3's start date also implements the previously-noted intent to **drop the pre-COVID period** — now an explicit constant rather than an approximate description.
 
 > **Open items for v3.** *Highest value first:* (1) **which split produced the recall-collapse figure** — in-period Test or OOT (changes how much weight the finding carries); (2) **v3's hyperparameters**, a blocking prerequisite for the SHAP-concentration design (§1.4b, `reg_alpha` confound); (3) training run date(s), given the 2025-vs-2026 discrepancy above.
-> (4) **what `Fttl` actually means** — decision or outcome (above); if it follows v1's `total_loss ∨ fast_track` construction, P1 is written into the label definition itself.
+> (4) ~~what `Fttl` actually means~~ ✅ **resolved 2026-08-04** — `Fttl` = `veh_total_loss` renamed, identical values, carries the forced 1s (P1 in the data; see above).
 > *Remaining:* (5) realised split sizes; (6) vehicles-per-claim distribution; (7) whether stratification appears elsewhere; (8) whether `cc_fttl` applies; (9) cleaning exclusions; (10) runtime environment; (11) feature set; (12) whether v3's training data still exists. *(Decision-rule form and threshold now ✅ confirmed.)*
 
 ### 1.4d Cross-version dataset summary (v1–v3)
@@ -760,17 +747,17 @@ Consolidated view of each version's train / test / validation / OOT splits — s
 | **v1** | Train *(Train)* | `lossdate < 2017-04-01`, then 80% | 178,435 | — |
 | **v1** | In-period holdout *(**Test**)* | random split from Train (80/20, `random_state=0`) | 44,609 | Random (non-stratified); **not OOT** |
 | **v1** | Temporal holdout 1 *(Val1)* | `2017-04-01 ≤ lossdate < 2017-06-30` | 36,049 | Temporal (OOT, ~3 months) |
-| **v1** | Temporal holdout 2 *(Val2)* | `lossdate ≥ 2017-06-30` | 52,498 | Temporal (OOT, longer horizon) |
-| **v2** | Train *(Train)* | 80% of `head(⌊0.8n⌋)` of `ReportedDate > 2018-01-01`, sorted | 🔎 TBD | Random, **stratified on target**; `random_state` 🔎 |
-| **v2** | In-period holdout *(**Validation**)* | remaining 20% of the same `head(⌊0.8n⌋)` pool | 🔎 TBD | Random, **stratified**; **not OOT** |
-| **v2** | Temporal holdout *(**Test**)* | `tail(⌊0.2n⌋)` **then** filtered to `ReportedDate > 2019-12-01` | 🔎 TBD — **< 20%**, realised only | Temporal (OOT) |
+| **v1** | Temporal holdout 2 *(Val2)* | `2017-06-30 ≤ lossdate ≤ 2018-02-09` (dataset end ✅ 2026-08-04) | 52,498 | Temporal (OOT, ~7.5 months) |
+| **v2** | Train *(Train)* | 80% of the `ReportedDate` `2018-01-02 → 2019-12-02` pool (sorted head) ✅ | 🔎 TBD | Random, **stratified on target**; `random_state` 🔎 |
+| **v2** | In-period holdout *(**Validation**)* | remaining 20% of the same `2018-01-02 → 2019-12-02` pool ✅ | 🔎 TBD | Random, **stratified**; **not OOT** |
+| **v2** | Temporal holdout *(**Test**)* | `2019-12-02 → 2020-09-30` (realised ✅ 2026-08-04; tail then `> 2019-12-01` filter, non-binding) | 🔎 TBD sizes | Temporal (OOT, ~10 months) |
 | **v3** | Train *(Train)* | 80% of the shuffled `ReportedDate_CLAIM < 2025-12-01` pool | 🔎 TBD | Random shuffle (`seed=123`), **not stratified** |
 | **v3** | In-period holdout *(**Test**)* | first 20% of the same shuffled pool | 🔎 TBD | Random; **not OOT** |
 | **v3** | Temporal holdout *(**OOT**)* | `2025-12-01 ≤ ReportedDate_CLAIM < 2026-05-01` | 🔎 TBD | Temporal (OOT, **5 months**) |
 
-**v1 date boundaries:** `EndTrainDate = 2017-04-01`, `EndValidationDate = 2017-06-30` (both on `lossdate`). Source extract shape `(311,591 × 198)`; splits sum to 311,591 (§1.4a), i.e. no corrupted-row drop in v1.
+**v1 date boundaries:** `EndTrainDate = 2017-04-01`, `EndValidationDate = 2017-06-30` (both on `lossdate`); **dataset max `lossdate` = 2018-02-09** ✅ (2026-08-04 — full extract period 2016-01-01 → 2018-02-09). Source extract shape `(311,591 × 198)`; splits sum to 311,591 (§1.4a), i.e. no corrupted-row drop in v1.
 
-**v2 window:** `ReportedDate > 2018-01-01` (strict), minus all rows with `ReportedDate == 2020-08-24`. ⚠️ The v2 Test size **cannot be derived as 20% of n** — the post-hoc date filter shrinks it by an unrecorded amount, and rows caught between `head(⌊0.8n⌋)` and that filter are dropped from every split (§1.4b). Report realised sizes only.
+**v2 window:** in-period pool `2018-01-02 → 2019-12-02`, OOT `2019-12-02 → 2020-09-30` ✅ (realised windows confirmed 2026-08-04), minus all rows with `ReportedDate == 2020-08-24` (which falls **inside the OOT block**). The realised OOT start (2019-12-02) sits immediately after the hard-coded `> 2019-12-01` filter, so the filter was **non-binding** and the silent-loss region is empty or near-empty for this run (§1.4b). Sizes still 🔎 — report realised sizes only.
 
 **✅ v2 cleaning detail — confirmed 2026-07-29.** v2 drops rows with `ReportedDate == 2020-08-24` as corrupted; this belongs to **v2**, not v1 (open item closed). ⚠️ The equality filter removes **every claim reported that day**, not a single record (§1.4b). 🔎 Still TBD: v2's raw extract shape, rows dropped, and whether other corrupted rows are removed.
 
@@ -780,7 +767,7 @@ Consolidated view of each version's train / test / validation / OOT splits — s
 |---|---|---|---|
 | Splitting variable | `lossdate` (accident date) | **`ReportedDate`** | `ReportedDate_CLAIM` — **same field as v2's**, renamed |
 | How the OOT boundary is set | **explicit cut-off dates** | **proportional** `tail(⌊0.2n⌋)`, then date-filtered | **explicit date** (`≥ 2025-12-01`) |
-| Data window | `lossdate ≥ 2016-01-01` | `ReportedDate > 2018-01-01` | `2023-06-01 → 2026-05-01` |
+| Data window | `2016-01-01 → 2018-02-09` ✅ | `2018-01-02 → 2020-09-30` (pool → 2019-12-02) ✅ | `2023-06-01 → 2026-05-01` |
 | Cleaning exclusions | `cc_fttl` rule-flagged rows (~2.54%, all splits) | all rows with `ReportedDate == 2020-08-24` | 🔎 TBD |
 | Maturation buffer? | 🔎 not visible | 🔎 not visible | ✅ **Yes** — `immature_date` |
 | In-period split stratified? | ❌ **No** — plain random | ✅ **Yes** — `stratify=target` | ❌ **No** — plain shuffle |
@@ -805,8 +792,8 @@ Consolidated reference. **Decimals are exactly as supplied from the real code; t
 | Python / dataframe stack | Python 3.5.2, pandas 0.22.0 | pandas 🔎 | **Polars** |
 | Model trained | ~2017 | **2021** | 🔎 (2025 or 2026 — unresolved) |
 | Deployed? | Yes, superseded | **Yes — currently live** | ❌ Never |
-| Training window | `lossdate < 2017-04-01` | `ReportedDate > 2018-01-01` | `2023-06-01 → 2026-05-01` |
-| Window span | ~1 yr 3 mo | ~3 yr 4 mo | 2 yr 11 mo |
+| Training window | `lossdate < 2017-04-01` (extract → 2018-02-09 ✅) | `2018-01-02 → 2019-12-02` pool; OOT → 2020-09-30 ✅ | `2023-06-01 → 2026-05-01` |
+| Window span | ~1 yr 3 mo (train) / 2 yr 1 mo (extract) | **1 yr 11 mo (pool)** / 2 yr 9 mo incl. OOT | 2 yr 11 mo |
 | Split variable | `lossdate` (accident date) | `ReportedDate` | `ReportedDate_CLAIM` *(= v2's field, renamed)* |
 | Label source | `pre_ml_label` (human era) | v1 production log | v2 production log |
 | Contamination | partial (human forced labels) | **essentially total** | **total** |
@@ -819,7 +806,7 @@ Consolidated reference. **Decimals are exactly as supplied from the real code; t
 
 | Parameter | **v1** | **v2** | **v3** |
 |---|---|---|---|
-| **target column** | `target` = `veh_total_loss ∨ veh_fast_track` ✅ | **`veh_total_loss`** alone ✅ | `Fttl` ⚠️ *(meaning ambiguous)* |
+| **target column** | `target` = `veh_total_loss ∨ veh_fast_track` ✅ *(disjunct = safeguard)* | **`veh_total_loss`** alone ✅ | `Fttl` **= `veh_total_loss` renamed** ✅ 2026-08-04 — all three carry the forced 1s in the data |
 | **scrap threshold** | 0.75 immobile / 0.85 mobile | 0.872 → **0.825** (2026-06-30 14:30 UK) | **0.984** @ prec 0.985; 0.970 @ prec 0.97 |
 | `objective` | — *(implied multiclass)* | `binary:logistic` | 🔎 |
 | `eval_metric` | `mlogloss` | `auc` | 🔎 |
