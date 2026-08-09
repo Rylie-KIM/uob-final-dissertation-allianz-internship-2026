@@ -55,13 +55,13 @@ VERSION_LABELS = ("v1", "v2", "v3")
 
 # What ACTUALLY exists per version — read off the real training code, 2026-08-08:
 #
-#              v1                          v2                          v3
-#   model      outputs/fasstacker_xgb.pkl  outputs/model.pkl           outputs/p146_model.pkl
-#   preproc    outputs/fttl_pipeline.pkl   outputs/pipeline.pkl        outputs/p146_pipeline.pkl
-#   raw        Z: inputs.pkl               Z: Data/clean_dataset.pkl   DATABASE extract (no file)
-#   features   Z: inputs_transformed.pkl   Z: Data/*_transf_{ts}.pkl   NOT SAVED — regenerate
-#   targets    a COLUMN in the data (veh_total_loss / veh_total_loss / Fttl), never its own file
-#   prod log   DESTROYED                   exists (live model)         NEVER EXISTED (not deployed)
+#                     v1                          v2                          v3
+#   model             outputs/fasstacker_xgb.pkl  outputs/model.pkl           outputs/p146_model.pkl
+#   preproc           outputs/fttl_pipeline.pkl   outputs/pipeline.pkl        outputs/p146_pipeline.pkl
+#   raw_dataset       Z: inputs.pkl               Z: Data/clean_dataset.pkl   DATABASE extract (no file)
+#   processed_inputs  Z: inputs_transformed.pkl   Z: Data/*_transf_{ts}.pkl   NOT SAVED — regenerate
+#   targets           a COLUMN in the data (veh_total_loss / veh_total_loss / Fttl), never its own file
+#   prod log          DESTROYED                   exists (live model)         NEVER EXISTED (not deployed)
 #
 # So: model + preprocessor live IN the repo (two separate pickles, all three versions);
 # data lives on the Z: network drive as pandas pickles (v1/v2) or in the database (v3).
@@ -75,17 +75,20 @@ READ_KINDS = (
     "preprocessor",  # the fitted preprocessing pipeline, its own in-repo pickle.
                      #   v2's is built from `tubular` classes; v3 additionally has a STATELESS
                      #   stage applied before the fitted one (see README training-flow section).
-    "log_source",    # the production scored log AS THAT VERSION EMITTED IT — their column names.
-                     #   ONLY v2 has one: v1's was destroyed, v3 was never deployed.
-    "features",      # POST-preprocessing matrix: what the model consumes. v1 ships one appended
-                     #   file (train+test+val1+val2), v2 ships three TIMESTAMPED files, v3 none.
-    "raw_input",     # the raw claim table, PRE-preprocessing. v1/v2: Z-drive pickle.
-                     #   v3: a database table, not a file — export it first (see VERSIONS["v3"]).
+    "log_source",         # the production scored log AS THAT VERSION EMITTED IT — their column
+                          #   names. ONLY v2 has one: v1's was destroyed, v3 was never deployed.
+    "processed_inputs",   # POST-preprocessing matrix: what the model consumes. v1 ships one
+                          #   appended file (train+test+val1+val2), v2 ships three TIMESTAMPED
+                          #   files, v3 none. (Renamed from "features", 2026-08-09 — pairs with
+                          #   the registry's raw_features/model_features vocabulary.)
+    "raw_dataset",        # the raw claim table, PRE-preprocessing. v1/v2: Z-drive pickle.
+                          #   v3: a database table, not a file — export first (see VERSIONS["v3"]).
 )
 
 WRITE_KINDS = (
-    "log",            # log_source with its columns RENAMED to ours — scoring/ingest.py writes it,
-                      #   and it is the only log anything downstream reads
+    "log",            # log_source with its columns RENAMED to ours — 01_export_v2.ipynb writes
+                      #   it (only v2 has a production log), and it is the only log anything
+                      #   downstream reads. (scoring/ingest.py did this; absorbed 2026-08-09.)
     "targets",        # claim_id + date + observed, DERIVED at ingest. No version ships this as
                       #   its own artefact — the target is a column inside raw/features
                       #   (v1/v2 `veh_total_loss`, v3 `Fttl`), so we extract it ourselves.
@@ -106,13 +109,15 @@ KINDS = READ_KINDS + WRITE_KINDS
 # src/models/<source>/baseline/<v>.pkl. Both routes are supported on purpose — v1's training data
 # was destroyed, so v1 can only ever be loaded, while v2/v3 could go either way.
 FALLBACK: dict[str, str | None] = {
-    "model":         "src/models/{source}/baseline/{v}.pkl",
-    "preprocessor":  "src/models/{source}/baseline/{v}_prep.pkl",
-    "log_source":    None,   # no sensible default — must be declared
-    "log":           "src/data/{source}/logs/{v}.parquet",
-    "features":      "src/data/{source}/inputs/features_{v}.parquet",
-    "targets":       "src/data/{source}/inputs/targets_{v}.parquet",
-    "raw_input":     None,   # no sensible default — must be declared
+    "model":            "src/models/{source}/baseline/{v}.pkl",
+    "preprocessor":     "src/models/{source}/baseline/{v}_prep.pkl",
+    "log_source":       None,   # no sensible default — must be declared
+    "log":              "src/data/{source}/logs/{v}.parquet",
+    "processed_inputs": "src/data/{source}/inputs/features_{v}.parquet",   # filename kept: docs
+                                                                           #   reference it
+    "targets":          "src/data/{source}/inputs/targets_{v}.parquet",
+    "raw_dataset":      "src/data/{source}/inputs/raw_{v}.parquet",   # the export notebooks'
+                                                                      #   frozen snapshot
     "scores":        "src/data/{source}/detection/{v}_scores.parquet",
     "attributions":  "src/data/{source}/detection/{v}_attributions.parquet",
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
@@ -160,35 +165,33 @@ VERSIONS: dict[str, dict] = {
         # "Model artefacts and reproduction". Absolute, or relative to repo root.
         "python": "src/envs/v1/.venv/bin/python",
 
-        # -- code entry points ----------------------------------------------------------
-        # "module.path:ClassName" — the preprocessing transformer CLASS. Optional, and probably
-        # unnecessary: the fitted preprocessing is pickled (see paths.preprocessor), so it is
-        # LOADED, not constructed. Fill this in only if a version ships no preprocessor pickle
-        # and its preprocessing must be rebuilt from source. ("package" is still required either
-        # way — unpickling re-imports the repo's classes.)
-        "builder": None,
-        # Optional per-version override for how the pickle is HANDLED (not named).
-        # Scoring needs no override: all three versions expose predict_proba (confirmed
-        # 2026-07-31), so scoring/predict.py works unchanged. What may still differ is how the
-        # fitted preprocessing is reached inside the pickle — training/retrain.py:42 assumes
-        # `named_steps["prep"]`. Set this only if that assumption fails for this version.
-        "adapter": None,
+        # ("builder"/"adapter" hooks removed 2026-08-09 — never used. The fitted preprocessing
+        # is always LOADED from paths.preprocessor, and all three versions expose predict_proba,
+        # confirmed 2026-07-31, so no per-version handling override was ever needed.)
 
         # -- artefact paths (read off the training code 2026-08-08) ---------------------
         # Absolute, or relative to repo_dir. Blank/PLACEHOLDER -> FALLBACK template.
+        #
+        # None here means: config does NOT resolve this from a declared file. Either the
+        # artefact never existed, or its Z:/DB source path lives in the SOURCES cell of
+        # notebook/real/01_export_<v>.ipynb (decided 2026-08-09) — that notebook converts the
+        # source to canonical parquet/CSV in our tree, and analysis reads the FALLBACK path.
+        # Z: paths are deliberately NOT declared here: a declared path always wins, and it
+        # would point the analysis .venv at a version-bound pandas pickle it cannot open.
         "paths": {
             # As transcribed from the training script. VERIFY the spelling against
             # `dir outputs` before first use ("fasstacker" vs "fasttracker") — a typo just
             # fails loudly with FileNotFoundError, so this is safe to try as-is.
             "model": "outputs/fasstacker_xgb.pkl",
             "preprocessor": "outputs/fttl_pipeline.pkl",
-            # v1's production log was destroyed — there is nothing to declare, ever.
-            # What DOES survive is the train-time scored file (claimnumber + predictions for
-            # train/test/val1/val2 appended), on the Z: drive — fill in its real path:
-            "log_source": PLACEHOLDER,   # Z:/.../predictions.pkl
-            # ONE appended file, train+test+val1+val2 in split order, post-preprocessing:
-            "features": PLACEHOLDER,     # Z:/.../inputs_transformed.pkl
-            "raw_input": PLACEHOLDER,    # Z:/P10_.../inputs.pkl
+            # Production log destroyed. The surviving TRAIN-TIME scored file
+            # (Z:/.../predictions.pkl) is exported to the "scores" parquet by 01_export_v1.
+            "log_source": None,
+            # Z:/.../inputs_transformed.pkl (one appended file, train+test+val1+val2) —
+            # read and exported by 01_export_v1; analysis reads the fallback.
+            "processed_inputs": None,
+            # Z:/P10_.../inputs.pkl — read and exported by 01_export_v1.
+            "raw_dataset": None,
         },
 
         # -- column names: OUR canonical name -> THEIR real column ----------------------
@@ -214,19 +217,17 @@ VERSIONS: dict[str, dict] = {
         "package": PLACEHOLDER,
         "xgboost": "1.4.2",       # user-confirmed 2026-08-01
         "python": "src/envs/v2/.venv/bin/python",
-        "builder": None,
-        "adapter": None,
         "paths": {
             "model": "outputs/model.pkl",           # read off the training code 2026-08-08
             "preprocessor": "outputs/pipeline.pkl",  # tubular-based; joblib.dump'd
-            # v2 is LIVE — a production scored log exists somewhere. Location unknown.
+            # v2 is LIVE — a production scored log exists somewhere. Location unknown; once
+            # found, 01_export_v2 reads it from here and writes the canonical "log" parquet.
             "log_source": PLACEHOLDER,
-            # Post-preprocessing splits are THREE files on the Z: drive, TIMESTAMPED at
-            # training time: Data/train_transf_{ts}.pkl / val_transf_{ts}.pkl /
-            # test_transf_{ts}.pkl. One path cannot name three files — point this at the
-            # train one once the timestamp is known, or at a re-export we make ourselves.
-            "features": PLACEHOLDER,
-            "raw_input": PLACEHOLDER,   # {DATA_FOLDER_PROD}/Data/clean_dataset.pkl on Z:
+            # THREE timestamped Z: files (Data/{train,val,test}_transf_{ts}.pkl) — their paths
+            # live in 01_export_v2's SOURCES cell; analysis reads the exported fallback parquet.
+            "processed_inputs": None,
+            # {DATA_FOLDER_PROD}/Data/clean_dataset.pkl on Z: — in 01_export_v2's SOURCES cell.
+            "raw_dataset": None,
         },
         "columns": {
             "claim_id": PLACEHOLDER,     # not read off yet — check clean_dataset.pkl
@@ -244,8 +245,6 @@ VERSIONS: dict[str, dict] = {
         "package": PLACEHOLDER,
         "xgboost": "3.2.0",       # user-confirmed 2026-08-01
         "python": "src/envs/v3/.venv/bin/python",
-        "builder": None,
-        "adapter": None,
         # v3's raw data is NOT a file: the training script pulls it straight from the database
         # (polars). To make it a raw_input artefact, export once on the company laptop and
         # declare the export path below.
@@ -262,10 +261,11 @@ VERSIONS: dict[str, dict] = {
             # has no such artefact" (same convention as columns), not "still to fill in".
             "log_source": None,
             # The split step saves nothing: no transformed matrices survive training.
-            # Features must be REGENERATED (sql export -> enrichments -> stateless ->
-            # preprocessor.transform) and land in our own tree via the fallback.
-            "features": None,
-            "raw_input": PLACEHOLDER,   # our own DB export — decide the path when exporting
+            # 01_export_v3 REGENERATES the matrix (sql -> enrichments -> stateless ->
+            # preprocessor.transform) and writes it to the fallback path.
+            "processed_inputs": None,
+            # No file exists — 01_export_v3 freezes its DB extract to the fallback snapshot.
+            "raw_dataset": None,
         },
         "columns": {
             "claim_id": PLACEHOLDER,    # `project_params.KEY` in the repo — read the actual string
@@ -366,17 +366,6 @@ def python_bin(version: str) -> pathlib.Path:
     return p
 
 
-def builder(version: str) -> tuple[str, str]:
-    """The version's preprocessing transformer as (module, class_name)."""
-    module, _, cls = _require(version, "builder").partition(":")
-    if not cls:
-        raise ValueError(
-            f"config.VERSIONS['{version}']['builder'] must be 'module.path:ClassName', "
-            f"got {_require(version, 'builder')!r}"
-        )
-    return module, cls
-
-
 def column(version: str, canonical: str) -> str:
     """That version's real name for one of our canonical columns."""
     if canonical not in CANONICAL_COLUMNS:
@@ -392,11 +381,6 @@ def column(version: str, canonical: str) -> str:
             f"config.VERSIONS['{version}']['columns']['{canonical}'] is still a placeholder."
         )
     return value
-
-
-def date_col(version: str) -> str:
-    """Convenience: the date column this version is split and analysed on."""
-    return column(version, "date")
 
 
 def rename_map(version: str) -> dict[str, str]:
@@ -569,27 +553,13 @@ def training_config(version: str) -> dict:
     return {k: v for k, v in TRAINING_CONFIG.get(version, {}).items() if not k.startswith("_")}
 
 
-# ======================================================================================
-# 6. Legacy constant — imported by existing notebooks; kept so they keep running
-# ======================================================================================
-#
-# SCRAP_THRESHOLD is v2's PRE-2026-07 cutoff. It is NOT a universal constant and is NOT v1's or
-# v3's rule. New code should read DECISION_RULES instead.
-#
-# (FEATURE_COLS / CATEGORICAL_COLS were removed on 2026-07-31: they listed the SYNTHETIC DGP's
-# column names, nothing imported them, and a real-data config is the worst possible place for a
-# synthetic schema to sit. The DGP's own copy lives in src/data/synthetic/generate/config.py.)
-
-SCRAP_THRESHOLD = 0.872
-
-
-# Kept for backwards compatibility: features/extract_features.py calls this.
-def model_path(version: str) -> pathlib.Path:
-    return path("model", version)
+# (Section 6, legacy shims, removed 2026-08-09: SCRAP_THRESHOLD — v2's pre-break 0.872, never a
+# universal constant — is now derived from DECISION_RULES by the legacy synthetic notebooks that
+# still want it; model_path() is gone, extract_features.py calls path("model", v) directly.)
 
 
 # ======================================================================================
-# 7. Report  —  what is still missing
+# 6. Report  —  what is still missing
 # ======================================================================================
 
 
@@ -598,7 +568,7 @@ def missing() -> dict[str, list[str]]:
     gaps: dict[str, list[str]] = {}
     for v, fields in VERSIONS.items():
         out: list[str] = []
-        for key in ("repo_dir", "package", "python"):   # "builder" is optional — see its comment
+        for key in ("repo_dir", "package", "python"):
             if not _filled(fields.get(key)):
                 out.append(key)
         for kind, value in fields.get("paths", {}).items():

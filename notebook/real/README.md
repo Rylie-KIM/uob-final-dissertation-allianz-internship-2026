@@ -16,7 +16,7 @@ gates every estimate on band row counts. Also runs the weaker v2→v3 near-bound
 |---|---|---|
 | question | **what does THIS version look at?** | **how does that change v1 → v2 → v3?** |
 | scope | one version at a time | all versions at once |
-| kernel | that version's env (`src/envs/v<k>/.venv`) | the analysis `.venv` (`sfp-detection`) |
+| kernel | that version's env (`src/envs/v<k>/.venv`) | the analysis `.venv` (`ml-sfp-detection`) |
 | opens the model pickle | **yes** | no — reads parquet only |
 | run it | **three times, once per version** | once, after the three runs |
 

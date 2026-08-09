@@ -7,10 +7,10 @@ it is extracting, exactly like src/scoring/predict.py.
 
 Two name sets are written, and they are NOT interchangeable:
 
-  input_features  — raw claim columns the pipeline expects  (pipe.feature_names_in_)
-                    -> use for concept-level overlap across versions
+  raw_features    — raw claim columns the pipeline expects  (pipe.feature_names_in_)
+                    -> pairs with config's "raw_dataset" artefact
   model_features  — columns the booster actually sees, post-preprocessing
-                    -> use for SHAP; this is what shap values are indexed by
+                    -> pairs with config's "processed_inputs"; what SHAP values are indexed by
 
 Usage — one call per version, each run with THAT version's interpreter. The pickle path comes
 from src/config.py, so nothing here hard-codes a repo name:
@@ -39,7 +39,7 @@ REGISTRY = pathlib.Path(__file__).parent / "registry"
 sys.path.insert(0, str(ROOT / "src"))
 
 
-def _input_features(pipe) -> list[str]:
+def _raw_features(pipe) -> list[str]:
     names = getattr(pipe, "feature_names_in_", None)
     if names is None and hasattr(pipe, "steps"):
         names = getattr(pipe.steps[0][1], "feature_names_in_", None)
@@ -75,7 +75,8 @@ def _model_features(pipe) -> list[str]:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--version", required=True, help="our label: v1, v2 or v3")
-    p.add_argument("--model", default=None, help="override; defaults to config.model_path(version)")
+    p.add_argument("--model", default=None,
+                   help="override; defaults to config.path('model', version)")
     p.add_argument("--out", default=None)
     a = p.parse_args()
 
@@ -84,7 +85,7 @@ def main() -> None:
     else:
         import config  # resolved from src/
         try:
-            model = config.model_path(a.version)
+            model = config.path("model", a.version)
         except ValueError as exc:
             raise SystemExit(f"\n{exc}\n")
 
@@ -93,7 +94,7 @@ def main() -> None:
         "version": a.version,
         "model_path": str(model),
         "pipeline_repr": type(pipe).__name__,
-        "input_features": _input_features(pipe),
+        "raw_features": _raw_features(pipe),
         "model_features": _model_features(pipe),
     }
 
@@ -107,7 +108,7 @@ def main() -> None:
     out = pathlib.Path(a.out) if a.out else REGISTRY / f"{a.version}.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(
-        f"[{a.version}] input={len(payload['input_features'])} "
+        f"[{a.version}] raw={len(payload['raw_features'])} "
         f"model={len(payload['model_features'])} -> {out}"
     )
 
