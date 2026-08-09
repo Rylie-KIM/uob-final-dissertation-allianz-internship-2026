@@ -40,6 +40,10 @@ The 15% / 43% split pins down the **true total-loss rate (class prior α = P(y=1
 
 (α here is the *marginal* class prior P(y=1); it is distinct from the scrap precision π_scrap = P(y=1 | scrap), the positive rate *within* the scrapped subgroup. See `literatures/notes/p28.md`.)
 
+> **✅ Update 2026-08-05 — the inputs to this bound are now measurable.** v1's training data survives **including `pre_ml_label`** (see § "Data availability"), so the three figures this bound is built from — the 15% scrap rate, the 43% fast-track share, the implied 6.45% unverified slice — no longer have to be taken as team-provided numbers; they can be **computed directly from v1's training rows**. The bound's endpoints may therefore shift.
+>
+> **⚠️ But α remains bounded, not identified.** The surviving `pre_ml_label` records the *forced* 1 for fast-tracked cars, not their true status — the oracle for those 6.45% was destroyed by the scrapping itself, and no surviving dataset recovers it. Data availability is not oracle availability. 🔎 Recompute the three input figures on real rows and restate the interval.
+
 ## Summary of 2 expected benefits from the ML model 
 1. reduce the process, cost, and time for total loss cars 
 2. predicting total loss car accuarately is important, since if the car is classified as a total loss, the insurance company has to pay the whole car vlaue. 
@@ -67,12 +71,14 @@ This means the model's reported precision is a measure of internal consistency w
 
 ### Why there is no ground truth (oracle) label
 
-Even if pre-model data existed (it has been disposed of under Insurance Company.'s data retention policy), it would not constitute a clean oracle. The two human label sources are **not** on an equal footing (supervisor decision, 2026-07-06):
+Pre-model data **does exist** (✅ corrected 2026-08-05 — `pre_ml_label` survives in v1's training data, § "Data availability"; it was previously recorded here as disposed of under the retention policy). It nonetheless **does not constitute a clean oracle** — the argument below was always written as a conditional ("even if it existed…") and its substance is unaffected by the correction. The two human label sources are **not** on an equal footing (supervisor decision, 2026-07-06):
 
 - **Engineer decisions** (garage physical inspection) **are the only ground truth in the entire system.** A car a garage engineer physically assessed has a verified repair-feasibility outcome. This engineer = ground-truth status applies **only to cars sent to a garage**; once a car is scrapped (by a handler or by a model) no engineer ever sees it and the oracle is permanently gone.
 - **Handler decisions** (call centre staff) are treated **unconditionally as a biased data generator — never as ground truth.** A call handler does not have the engineering knowledge to judge repair feasibility, so a handler who writes a car off without sending it to a garage produces a forced label with no independent verification. This is the original, **human-based SFP loop** that predates the ML model: handler judgment → write-off → the outcome is recorded as total loss with no way to check it → that biased label becomes evidence for the next decision. Because of this, handler-originated labels are regarded as **contaminated by construction, regardless of how confident any individual handler was** — they are not a weaker oracle, they are not an oracle at all.
 
-Two practical problems compound this: (a) in the pre-ML records it is not always possible to tell whether a given `pre_ml_label` came from an engineer (ground truth) or a handler (biased generator), so even the genuinely reliable engineer labels cannot be cleanly isolated and recovered; and (b) the pre-ML data is disposed of anyway.
+One practical problem compounds this: in the pre-ML records it is not always possible to tell whether a given `pre_ml_label` came from an engineer (ground truth) or a handler (biased generator), so even the genuinely reliable engineer labels cannot be cleanly isolated and recovered.
+
+> **✅ Corrected 2026-08-05.** A second problem was previously listed here — "the pre-ML data is disposed of anyway" — and it is **false**: `pre_ml_label` survives inside v1's training data (§ "Data availability"). This makes the *provenance* problem above the **sole and now binding** obstacle: the labels are in hand, but engineer-origin and handler-origin rows still cannot be told apart, so the data's existence does not by itself yield a clean oracle. 🔎 Check whether the surviving extract carries any provenance/source field that would separate them — if it does, a partial engineer-only oracle becomes recoverable for the first time, which would be a materially new result.
 
 The model's goal was never to reproduce handler judgment — **v1 was built to *outperform* the call handler** and approach engineer-level certainty (98.5% precision). But it is trained on, and evaluated against, a log that conflates biased handler decisions with reliable engineer decisions, with scrapped cars never verified at all. This structural absence of oracle labels is not a data quality gap — it is the defining feature of the SFP problem in this domain. Note there are therefore **two nested SFP loops**: the *human-based* loop (handlers writing off without verification, embedded in `pre_ml_label`) and the *model-based* loop (§ Training Process) that inherits and amplifies it.
 
@@ -501,16 +507,24 @@ The training year fixes the timeline and raises two issues the dissertation shou
 - **⚠️ COVID-19 sits in the OOT block, not the training pool** *(corrects the earlier "training window spans COVID" reading)*. The in-period pool ends 2019-12-02 — entirely **pre-COVID** — while the OOT block (2019-12-02 → 2020-09-30) spans the first UK lockdown, when claim volumes collapsed and the incident mix changed. Two consequences: **(a)** v2 never saw COVID-era or post-COVID claims in training at all — the drift exposure above starts immediately at deployment; **(b)** v2's headline OOT figures were measured partly on an **anomalous period**, so its reported out-of-time performance is not a clean read of normal-times generalisation. *(The earlier volume-interaction worry about the proportional tail is superseded — the realised windows show the date filter was non-binding, see the silent-loss note above.)*
 - ✅ The earlier placeholder describing v2's window as "≈ 2022–2024" is **wrong**, and now exactly resolved: the data window ends **2020-09-30**; training happened in 2021.
 
-## Data availability — v2's training dataset survives, v1's does not
+## Data availability — ✅ CORRECTED 2026-08-05: all three training sets survive; v1's *log* is what is gone
 
-v1's training dataset has been **destroyed under the data-retention period**. **v2's training dataset still exists**, with paths configured on the company `Z:` drive (to be wired in from the saved config file when work moves onto the Allianz machine).
+> **⚠️ This section supersedes the previous account, which stated that v1's training dataset had been destroyed under the data-retention period. That was wrong.** The correction **inverts** v1's availability: its *training data* is present, its *production log* is not. Every claim elsewhere in this document that rests on "v1's training data is gone" is retracted; every claim that rests on "infer it from the v1 log" is now the one that fails.
 
-This asymmetry shapes what the dissertation can actually do:
+| Version | Training data | Production log | Status |
+|---|---|---|---|
+| **v1** | ✅ **exists — including the `pre_ml_label` target** | ❌ **gone — scored inputs *and* observed outcomes** (outcome recovery being attempted, not assumed) | deployed, superseded |
+| **v2** | ✅ exists (`Z:` drive) | ✅ exists | **currently live** |
+| **v3** | ✅ exists (training + OOT) | ❌ **cannot exist — never deployed** | never deployed |
 
-- **v2 is re-derivable end-to-end** — the split can be re-run, the model re-trained and re-scored, and the label construction audited directly against source rows.
-- **v1 is not.** Only its code and serialised artefacts (model pickle, `inputs.pkl`) survive, so **every v1 statement in this document is a reading of code and artefacts, not something re-computable from data.**
-- **For the SFP analysis specifically:** the v1 → v2 hand-off can only be examined **from the v2 side**. Anything requiring v1's actual training rows — e.g. directly measuring the forced-positive rate *within v1's training labels* — is **not recoverable**, and must be inferred from v1's production log or from the artefacts.
-- **Therefore the empirical work should be anchored on v2**, with v1 entering as documented structure rather than as re-analysable data.
+What this changes, in both directions:
+
+- **v1 is now re-derivable, not merely documented.** The split scheme, the `cc_fttl` exclusion and the `veh_fast_track` × `veh_total_loss` target construction can be **audited against real source rows** rather than read off code. The forced-positive rate *within v1's training labels* — previously recorded as "not recoverable" — is now **directly measurable**.
+- **`pre_ml_label` survives.** It is v1's training target, so the human-era labels were **not** disposed of after all. **⚠️ This does *not* point-identify the class prior α, and the bound α ∈ [8.55%, 15%] stands.** Data availability is not oracle availability: for the 6.45% of pre-ML cars that were fast-tracked, the recorded `pre_ml_label` is the *forced* 1, and their true status was destroyed by the scrapping itself — no surviving dataset can recover it. What *does* change is that the bound's **inputs become empirical**: the 15% scrap rate, the 43% fast-track share and the 6.45% unverified slice were team-provided figures, and can now be **computed directly from v1's training rows** rather than taken on trust. The bound may therefore tighten or move, but it remains a bound.
+- **v2 remains re-derivable end-to-end** and, because its log also survives, remains the anchor for anything requiring observed production behaviour.
+- **⚠️ The v1 → v2 hand-off loses its observational side.** The previous fallback — "infer it from v1's production log" — is **no longer available**: that log is gone. v1's production scores and decisions must now be **reconstructed** by re-scoring v1's surviving artefact on surviving feature rows, which makes them *reconstructed* rather than *observed* quantities. Any analysis needing genuine v1 production behaviour (the mobility overlap band of § "v1 scrapping threshold", the error-inheritance detector) must state this explicitly and justify the reconstruction. 🔎 Whether v1's model pickle can be re-scored on v2's training rows depends on feature-space compatibility — see `features/`.
+- **⚠️ The `…/Prod-Predictions/inputs.pkl` references in this document are stale** and should be read as historical: that artefact is part of the missing log. The Python-3.5.2-compatible `src/scoring/inspect_pickle.py` remains useful for v1's *training* pickle, which is subject to the same pandas-0.22.0 unpickling constraint.
+- **v2b is still not reproducible on real data — but for the opposite reason.** It mixes `pre_ml_label` with the v1 log; the pre-ML half is now available and the **v1-log half is not**. The conclusion (synthetic-only) is unchanged; its justification is inverted.
 
 ## The decision rule — a single global cutoff (no mobility segmentation)
 
@@ -745,7 +759,9 @@ And the capacity controls differ just as much: v3 uses **shallow, tightly-constr
 
 > **Consequence: the v2a → v3a pair is confounded too.** Every capacity and regularisation knob differs, so a difference in feature-importance concentration between v2 and v3 **cannot be attributed to the data (and hence to SFP) without controlling for the configuration.** The "run it on v2a → v3a instead" escape route from the v1 → v2a parallel-trends problem is therefore **not available as-is**. Both candidate pairs are now confounded, each for a different reason.
 >
-> The remaining options are the ones already listed in the v2 section, now **required** rather than optional: **(i)** matched-hyperparameter re-training (feasible for v2, whose training data survives; 🔎 v3's data status unknown); **(ii)** a regularisation/capacity sensitivity sweep bounding how much of the observed ΔC the configuration alone can produce; **(iii)** report the concentration result as *consistent with* the loop rather than as identifying it. Whichever route, **every version's configuration must be printed beside its concentration figures.**
+> The remaining options are the ones already listed in the v2 section, now **required** rather than optional: **(i)** matched-hyperparameter re-training — ✅ **now feasible for all three versions** (corrected 2026-08-05: v1's and v3's training data both survive, not just v2's), so a configuration can be held fixed while the training *data* is varied across every generation, which is the clean separation this confound needs; **(ii)** a regularisation/capacity sensitivity sweep bounding how much of the observed ΔC the configuration alone can produce; **(iii)** report the concentration result as *consistent with* the loop rather than as identifying it. Whichever route, **every version's configuration must be printed beside its concentration figures.**
+>
+> **✅ This is the largest single gain from the 2026-08-05 correction.** The confound was previously irreducible on the v1 → v2 pair because v1's data was believed destroyed, leaving only option (iii). With all three training sets in hand, the design can now run **the same configuration on v1's, v2's and v3's data** and read the concentration difference as attributable to the data rather than the regularisation. 🔎 Library-version matching (xgboost 1.4.2 vs 3.2.0) remains a separate obstacle and is *not* solved by this.
 
 > 🔎 **Confirm `reg_alpha` is genuinely absent from v3's call.** The list above does not include it, nor `objective` or `eval_metric`, so the listing may be partial. This matters: if v3 in fact sets `reg_alpha` near v2's value, the confound narrows sharply. Also confirm v3's `eval_metric` — v2 used `auc`, which the v2 section flags as misaligned with the precision ≥ 0.985 constraint.
 
@@ -865,7 +881,8 @@ Consolidated view of each version's train / test / validation / OOT splits — s
 | Realised sizes derivable from n? | Yes | ❌ **No** — post-hoc filter shrinks OOT silently | ✅ Yes — head/tail exactly complementary |
 | Library | pandas 0.22 / Py 3.5.2 | pandas | **Polars** |
 | Split seed | `random_state=0` | 🔎 TBD (model: 42) | `seed=123` |
-| Training data still exists? | ❌ **Destroyed** (retention) | ✅ **Yes** (`Z:` drive) | 🔎 TBD |
+| Training data still exists? | ✅ **Yes** — incl. `pre_ml_label` ✅ *(corrected 2026-08-05)* | ✅ **Yes** (`Z:` drive) | ✅ **Yes** (training + OOT) |
+| Production log still exists? | ❌ **Gone** — inputs *and* outcomes | ✅ **Yes** | ❌ n/a — never deployed |
 
 **Overall, v3's split design is the soundest of the three** — explicit OOT date, a ~5-month holdout matching the documented methodology, exactly complementary head/tail, an explicit maturation buffer, and unambiguous naming. Its two weaknesses are the **loss of v2's stratification** and the **claim-level leakage exposure** created by shuffling (see § "Model v3").
 
@@ -889,7 +906,8 @@ Consolidated reference. **Decimals are exactly as supplied from the real code; t
 | Rows (raw extract) | 311,591 × 198 | 🔎 | 🔎 |
 | In-period split stratified? | ❌ No | ✅ Yes (`stratify=target`) | ❌ No |
 | Maturation buffer | 🔎 not visible | 🔎 not visible | ✅ `immature_date` |
-| Training data still exists? | ❌ Destroyed | ✅ Yes (`Z:`) | 🔎 |
+| Training data still exists? | ✅ Yes — incl. `pre_ml_label` ✅ | ✅ Yes (`Z:`) | ✅ Yes (training + OOT) |
+| Production log still exists? | ❌ **Gone** (inputs + outcomes) | ✅ Yes | ❌ n/a — never deployed |
 
 ### Hyperparameters
 
@@ -948,11 +966,13 @@ Both bands are **confounded, not random**, so neither restores clean positivity 
 
 | Period | Model running | Who made scrap decisions | Label generated | Researcher access |
 |---|---|---|---|---|
-| Before ~2018 | None (pre-ML era) | Handlers + engineers | `pre_ml_label` | ✗ Outside retention window |
-| ~2018 – pre-v2 deployment | None → v1 (transition date unknown) | Handlers/engineers → Model v1 | `pre_ml_label` → `model_v1_observed_outcome` | ✗ `pre_ml_label` disposed; v1 log available from ~2018 (TBC) |
-| ~2022 – present | **v2** *(currently live)* | Model v2 | `model_v2_observed_outcome` | ✓ v2 scores + decisions |
+| Before ~2018 | None (pre-ML era) | Handlers + engineers | `pre_ml_label` | ✅ **Available** — survives as v1's training target *(corrected 2026-08-05)* |
+| ~2018 – pre-v2 deployment | None → v1 (transition date unknown) | Handlers/engineers → Model v1 | `pre_ml_label` → `model_v1_observed_outcome` | ⚠️ **Split:** `pre_ml_label` ✅ available; **v1 production log ❌ gone** (inputs + outcomes) |
+| ~2022 – present | **v2** *(currently live)* | Model v2 | `model_v2_observed_outcome` | ✓ v2 scores + decisions + training data |
 
-> v1's exact deployment and end dates are not confirmed. The ~2022 figure for v2 deployment is approximate. Log data start date (~2018) is also approximate — to be confirmed when real data is provided.
+> ✅ **Corrected 2026-08-05 — this table previously had both v1 rows backwards** (`pre_ml_label` marked disposed, v1 log marked available). The truth is the reverse: the pre-ML labels survive inside v1's training data, and it is the v1 *production log* that is gone. See § "Data availability".
+>
+> v1's exact deployment and end dates are not confirmed. The ~2022 figure for v2 deployment is approximate.
 
 ---
 
@@ -960,8 +980,8 @@ Both bands are **confounded, not random**, so neither restores clean positivity 
 
 | Model | Trained on | Training label | Training window | Deployment |
 |---|---|---|---|---|
-| **v1** | Pre-ML era production log | `pre_ml_label` (human handler/engineer decisions) | Unknown — we define this for the synthetic simulation | ✓ Deployed (dates TBC) |
-| **v2** *(currently live)* | v1 production log only | `model_v1_observed_outcome` | All v1-generated data, pre-2022 only; `pre_ml_label` already disposed at retraining time | ✓ Currently active |
+| **v1** | Pre-ML era production log | `pre_ml_label` (human handler/engineer decisions) | `lossdate < 2017-04-01` (extract → 2018-02-09) ✅ — **training data survives, `pre_ml_label` included** | ✓ Deployed (dates TBC) |
+| **v2** *(currently live)* | v1 production log only | `model_v1_observed_outcome` | `2018-01-02 → 2019-12-02` pool ✅. ⚠️ *(corrected 2026-08-05)* `pre_ml_label` was **not** disposed at retraining time — why v2 was trained on the v1 log alone is therefore an open question, not a data-availability necessity | ✓ Currently active |
 | **v3** *(not deployed)* | v2 production log | `model_v2_observed_outcome` | ✅ Window confirmed: `2023-06-01 < ReportedDate_CLAIM < 2026-05-01` (drops the pre-COVID period, as previously described). ⚠️ "Attempted 2025" conflicts with an end date of 2026-05-01 — see § "Model v3" | ✗ Recall collapsed when precision held at ≥ 0.985 |
 
 > The "drop pre-COVID data" consideration came from the v3 retraining attempt — it was not part of v2's training design.
@@ -970,14 +990,16 @@ Both bands are **confounded, not random**, so neither restores clean positivity 
 
 ### 3. What this research can and cannot access
 
-| | Pre-ML period (~2018 – v2 deployment) | v2 production period (~2022 – present) |
+| | Pre-ML + v1 era | v2 production period (~2022 – present) |
 |---|---|---|
-| **Claim features** | ✓ from ~2018 (TBC) | ✓ |
-| **Model scores** | ✓ `model_v1_score` (v1 log, pre-2022) | ✓ `model_v2_score` |
-| **Model decisions** | ✓ `model_v1_decision` | ✓ `model_v2_decision` |
-| **Observed outcome label** | ✓ `model_v1_observed_outcome` | ✓ `model_v2_observed_outcome` |
-| **Pre-ML targets** | ✗ `pre_ml_label` disposed (retention policy) | ✗ N/A |
+| **Claim features** | ✅ **Yes** — v1's training data survives | ✓ |
+| **Model scores** | ❌ `model_v1_score` **gone** — reconstructable only by re-scoring v1's artefact | ✓ `model_v2_score` |
+| **Model decisions** | ❌ `model_v1_decision` **gone** — same | ✓ `model_v2_decision` |
+| **Observed outcome label** | ❌ `model_v1_observed_outcome` **gone** *(recovery being attempted — do not assume)* | ✓ `model_v2_observed_outcome` |
+| **Pre-ML targets** | ✅ **`pre_ml_label` available** — survives as v1's training target | ✗ N/A |
 | **Ground truth / oracle** | ✗ None — scrapped cars never garage-verified; handler vs engineer indistinguishable in records | ✗ None |
+
+> ✅ **Corrected 2026-08-05 — the first column was previously inverted.** It recorded v1's scores/decisions/outcomes as available and `pre_ml_label` as disposed; the reverse is true. Note that the **oracle row is unchanged**: it was never a data-retention matter. The oracle is absent because scrapped cars are physically destroyed without assessment, which no surviving dataset can undo.
 
 > **Synthetic data note:** Pre-ML era dates and v1 deployment dates are unknown in real data. For the synthetic simulation these are set by us. The simulation generates `pre_ml_label` from a rule-based DGP to reproduce v1's training — this column has no real-world counterpart available to the researcher.
 
@@ -1020,14 +1042,16 @@ df["model_v1_observed_outcome"] = np.where(
 )
 ```
 
-> **⚠️ Hard constraint — v1's training data is gone and cannot be accessed.** The `pre_ml_label` dataset (human-era handler/engineer decisions, 2016–2021) that v1 was trained on has been **permanently disposed of under Insurance Company.'s data-protection and regulatory (retention-policy) obligations**. It is **not archived, not recoverable, and the research has no access to it** — v1's training data can never be reconstructed, re-scored, or audited retrospectively, and the true pre-ML class prior (α, above) can only be *bounded*, never measured directly.
+> **✅ RETRACTED 2026-08-05 — this constraint was stated backwards.** The block previously asserted that v1's training data and the `pre_ml_label` dataset had been permanently disposed of under retention obligations, and that v1 could therefore only be studied through its production log. **Both halves are wrong, and in opposite directions.** See § "Data availability" for the corrected statement. What actually holds:
 >
-> **This is a first-class experiment-design constraint, not a footnote.** Every method in this project must be designed to work *without* v1's original training data or the pre-ML labels:
-> - No approach may assume access to `pre_ml_label` or a clean pre-ML holdout — the counterfactual v2b (which mixes in `pre_ml_label`) is therefore a **synthetic-only** device and can never be reproduced on real Allianz data.
-> - v1 can only be studied through the **artefacts it left behind** (its production log: `model_v1_score`, `model_v1_decision`, `model_v1_observed_outcome`), never through its inputs.
-> - Any debiasing / unbiased-evaluation / causal-mitigation design that would require the original training labels to validate against is **infeasible on real data** and must instead rely on the v1 log, garage-verified rows, and bounding arguments.
+> - **v1's training data survives, `pre_ml_label` included.** It *can* be re-scored, audited and re-analysed. Designs may assume access to it and to a pre-ML holdout.
+> - **v1's production log is what is gone** — scored inputs *and* observed outcomes (`model_v1_score`, `model_v1_decision`, `model_v1_observed_outcome`). The old instruction to "study v1 through the artefacts it left behind, never through its inputs" is now **exactly inverted**: the inputs survive and the artefacts do not. *(Outcome recovery is being attempted but must not be assumed.)*
+> - **The class prior α is still only bounded** — but for a different reason than stated above. Not because the data is missing: because for the 6.45% fast-tracked slice the *oracle* was destroyed by the scrapping itself, and the surviving `pre_ml_label` records the forced 1 rather than the true status. **Data availability is not oracle availability.** The bound's input figures do, however, become directly measurable.
+> - **v2b remains synthetic-only, with its justification inverted.** It mixes `pre_ml_label` with the v1 log; the pre-ML half is now available and the **v1-log half is not**, so it still cannot be reproduced on real data.
 >
-> This irreversibility is a core reason the SFP loop is hard to untangle: the one dataset that could anchor the chain to an uncontaminated ground truth no longer exists.
+> **The design constraint survives in weakened, relocated form.** Methods must now be designed to work without **v1's production log**, not without its training data. Anything requiring genuine observed v1 production behaviour — the mobility overlap band, the error-inheritance detector — must either reconstruct v1's scores by re-scoring the surviving model artefact on surviving feature rows (and label them *reconstructed*, not *observed*), or rely on garage-verified rows and bounding arguments as before.
+>
+> The chain still cannot be anchored to uncontaminated ground truth — but the reason is the destroyed *oracle*, not a destroyed *dataset*.
 
 ### Model v2 — currently deployed; trained exclusively on v1-generated data
 
@@ -1133,6 +1157,15 @@ On **real** data we do not choose — the repos did whatever they did (typically
 
 ### Model artefacts and reproduction — clone & run, not re-implement (updated 2026-07-01)
 
+> **✅ CORRECTED 2026-08-08 (read off the training code):** the preprocessing and the model are
+> **two separate pickles**, in every version — `fttl_pipeline.pkl` + `fasstacker_xgb.pkl` (v1),
+> `pipeline.pkl` + `model.pkl` (v2), `p146_pipeline.pkl` + `p146_model.pkl` (v3), all under the
+> repo's `./outputs/`. The 2026-07-01 "one combined Pipeline pickle" description below is wrong on
+> that point. Everything else in this section stands: preprocessing still lives only inside a
+> fitted pickle (not re-implementable), unpickling still needs that version's own env, and the
+> estimator's `predict_proba` takes the **already-preprocessed** matrix. See "Training flow &
+> artefact storage by version" below for the full per-version flows.
+
 Confirmed with the team (2026-07-01): each production version is preserved as a **pickled scikit-learn `Pipeline`** — the preprocessing steps *and* the model are frozen together in one `.pkl`, not stored as separately readable code plus a bare model. This has three hard consequences for how this project must consume them:
 
 1. **The preprocessing logic is not independently re-implementable — and must not be guessed.** A version's preprocessing lives *inside* its pickled pipeline, not in any file we can read. The correct way to obtain a version's features/scores is to **clone that version's model repository and run its own pipeline** in a matching environment — never to re-code "what it probably did". (Re-implementing by guess is exactly what would inject a spurious #10-style artefact.)
@@ -1170,6 +1203,117 @@ python src/data/synthetic/run.py
 
 > Full column-level schema, the data-generating process, and the SFP verification checks live in `src/data/synthetic/synth_data_structure.md`.
 
+
+# Training Flow & Artefact Storage by Version (real, read off the training code 2026-08-08)
+
+What each version's training run actually does, start to finish, and **where every artefact
+lands**. Three storage tiers appear, and they have different reachability:
+
+| tier | what lives there | reachable from |
+|---|---|---|
+| repo `./outputs/` | the two fitted pickles (pipeline + model), per version | any clone, inside that version's env |
+| `Z:` network drive | raw extracts, transformed matrices, predictions (pandas pickles) | company laptop only |
+| company database | v3's raw extract (`datascience_lab.prod.p146_extract_v3`) | company laptop only, re-queryable |
+
+A `Z:` pandas pickle only opens under the pandas that wrote it — so v1's data pickles are readable
+**only inside env-v1** (pandas 0.x / Python 3.5), and must be re-exported to parquet there before
+the analysis env can touch them.
+
+## v1 — file-based, everything on `Z:`, four splits appended into single files
+
+```
+Z:/P10_…/inputs.pkl                                    # raw extract (pandas pickle)
+  → cc_fttl flag (ClaimCentreIndicators): handler-flagged FTTL rows (~2.54%) DROPPED from training
+  → target = veh_total_loss   (veh_fast_track=1 forces veh_total_loss=1 — see "v1 target construction")
+  → merge car_table on abicode_ext = abicode           # vehicle enrichment join
+  → incident_time = hour(lossdate)                     # engineered feature
+  → SplitData(data, …) on lossdate:
+        train+test  2016-01-01 ≤ x < 2017-04-01, split 80/20
+        val1        2017-04-01 ≤ x < 2017-06-30
+        val2        2017-06-30 ≤ x ≤ 2018-02-09  (extract end; user-confirmed 2026-08-08)
+  → features = param.MODEL_FEATURES + NOTROADWORTHY + DAMAGE_FEATURES + ADMIN_FEATURES
+  → claims_pipe.fit(train)          → ./outputs/fttl_pipeline.pkl        # fitted on TRAIN only
+  → transform all four splits       → Z:/…/inputs_transformed.pkl        # ONE appended file
+  → trainXGB(…)                     → ./outputs/fasstacker_xgb.pkl       # eval_set=[(X_test,y_test)]
+  → predict_proba on all splits     → Z:/…/predictions.pkl               # [claimnumber, predictions]
+  → per-split roc_auc printed
+```
+
+- **Claim id = `claimnumber`** — carried in the predictions file, so v1's train-time scores ARE
+  joinable back to claims.
+- The transformed file appends train+test+val1+val2 **in that order** with no split column — split
+  membership must be reconstructed from `lossdate` against the boundaries above.
+- Spelling of `fasstacker_xgb.pkl` is as transcribed; verify against `dir outputs` (a typo fails
+  loudly with FileNotFoundError, so trying it as-is is safe).
+
+## v2 — pre-cleaned `Z:` extract, tubular pipeline, timestamped split files
+
+```
+{DATA_FOLDER_PROD}/Data/clean_dataset.pkl              # pre-cleaned extract on Z: (exact folder TBC)
+  → split_data(data, 0.2, 2018-01-01)  on ReportedDate # see "Model v2 — Actual Split"
+  → raw splits saved:      Z: Data/train_raw_{ts}.pkl / val_raw_{ts}.pkl / test_raw_{ts}.pkl
+  → fit_and_save_input_checker(train)  → ./outputs/input_checker.pkl
+  → build_fit_save_pipeline(train)     → ./outputs/pipeline.pkl          # tubular transformers
+  → transform all splits               → Z: Data/train_transf_{ts}.pkl / val_transf_ / test_transf_
+  → train_model_save(train[MODEL_FEATURES], train[TARGET])
+                                       → ./outputs/model.pkl             # XGBClassifier, joblib
+```
+
+- Target = `par.TARGET` = **`veh_total_loss`** (v1's `∨ veh_fast_track` term gone — see "v2 target").
+- The split files carry a **training-time timestamp in the filename** — a fresh run writes new
+  files rather than overwriting, so the timestamp identifies *which* training run's data survives.
+  The timestamp of the production run must be read off the `Z:` folder before `paths.features`
+  can be declared.
+- `input_checker.pkl` is a fitted input-schema validator — an artefact v1 and v3 do not have.
+- Data window 2018-01-02 → 2020-09-30 (train/val pool → 2019-12-02); see "Model v2 — Actual Split".
+
+## v3 — database extract, in-repo enrichment joins, nothing but the two pickles saved
+
+```
+DatabaseConnector: SELECT * FROM datascience_lab.prod.p146_extract_v3    # polars, NO raw file
+  → add_target(): vehicle status ∈ {fttl, total_loss, unrecovered} → Fttl = 1
+  → subset_by_date(...)                                # maturation cut (immature_date)
+  → enrichments from ./fttl/dependencies/:             # hpi + thatcham parquets
+        join on project_params.ENRICHMENT_KEY, how=left
+  → cc_rule flags from ./fttl/dependencies/cc_rule_lookup.csv
+        (FTTL YEARS / FTTL YEARS airbag deployed / MAKE / SHORT MODEL;
+         intermediate _cc_rule_* columns computed, then dropped along with the lookup features)
+  → split_into_train_test_oot_by_date on ReportedDate_CLAIM, OOT ≥ 2025-12-01   # saves NOTHING
+  → stateless_pipeline(each split)                     # code, not a pickle — rerun from the repo
+  → build_pipeline(train, stateful_pipeline)           → ./outputs/p146_pipeline.pkl
+  → model fields = [Fttl, project_params.KEY, ReportedDate_CLAIM, *WORKING_MODEL_FEATURES]
+  → build_model(train, WORKING_MODEL_FEATURES, target=Fttl, HYPERPARAMETERS)
+                                       → ./outputs/p146_model.pkl
+  → get_predictions(): fttl_predicted_prob, fttl_predicted_labels (> threshold)   # in memory only
+  → recall / precision / roc_auc computed per split
+```
+
+- **No raw file and no saved matrices**: the split step saves nothing, and predictions/metrics
+  live only in memory. Reproducing v3's features requires re-running the whole chain —
+  DB export → enrichment joins → cc-rule → stateless → `p146_pipeline.pkl.transform`.
+- **The enrichment tables are as-of-now, not as-of-training**: a DB re-extract today joins
+  *current* hpi/thatcham rows, so regenerated features can differ from what training saw (see
+  "Enrichment Table — Update Cycle"). Carry this as a caveat on any regenerated v3 matrix.
+- Claim id = whatever string `project_params.KEY` holds — to be read off the repo.
+- Data window 2023-06 → 2026-05 on `ReportedDate_CLAIM`; OOT block ≥ 2025-12-01.
+
+## What differs across the three flows — the SFP-relevant summary
+
+| | v1 | v2 | v3 |
+|---|---|---|---|
+| raw source | `Z:` pickle | `Z:` pickle (pre-cleaned) | database query |
+| dataframe library | pandas | pandas | **polars** |
+| target column | `veh_total_loss` (∨ fast_track) | `veh_total_loss` | `Fttl` (same label renamed) |
+| split variable | `lossdate` (accident) | `ReportedDate` | `ReportedDate_CLAIM` |
+| enrichment | car_table on `abicode_ext` | (inside the cleaned extract) | hpi + thatcham + cc-rule lookup, in-repo |
+| pipeline style | bespoke `claims_pipe` | `tubular` transformers | stateless (code) + stateful (pickle) |
+| transformed data saved? | yes — one appended file | yes — three timestamped files | **no** |
+| train-time scores saved? | yes — `predictions.pkl` (`claimnumber`) | no | no (in memory only) |
+| production log today | **destroyed** | exists (live) | **never existed** (not deployed) |
+
+Every row of that table is a *pipeline-divergence* axis in the sense of "Preprocessing and
+Training-Window Divergence Across Versions" — none of it is SFP, all of it can move scores, and
+all of it must be held out of any cross-version claim.
 
 # Deployment & Serving Infrastructure — AML → FastAPI
 
