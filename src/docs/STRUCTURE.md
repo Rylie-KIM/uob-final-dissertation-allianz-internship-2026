@@ -14,9 +14,23 @@ repo/
 │   └── v1/ · v2/ · v3/
 │
 └── src/
-    ├── config.py
+    ├── config.py             # every real name/path, per version. The ONLY file that may hold one.
+    ├── schema.py             # [now] canonical column names + to_canonical()/require(). The
+    │                         #   translation applied once at ingest — see § "Paths are resolved by KIND"
     ├── figstyle.py           # canonical matplotlib style for all dissertation figures (spec: notebook/FIGURE_TEMPLATE.md)
-    ├── threshold.py          # [plan] τ, in ONE place: tune() - fall back when cloned ML system don't have tuning logic · apply() · read_off()  — see § "τ has two sources"
+    ├── shap_kit.py           # [now] the ONE module notebook/real/00_SHAP.ipynb imports. Runs INSIDE
+    │                         #   env-v1/v2/v3, so it may use only numpy/pandas/matplotlib: every
+    │                         #   figure (beeswarm · waterfall · force · dependence · band bars ·
+    │                         #   interaction heatmap) is drawn from raw φ rather than through shap's
+    │                         #   plotting layer, which does not exist in the xgboost-0.72-era
+    │                         #   stack. Also holds the interaction/association split: TreeSHAP
+    │                         #   interaction values (what the MODEL does jointly) vs
+    │                         #   pearson/spearman/mutual-info on X (what the DATA does) — kept as
+    │                         #   separate functions because they routinely disagree. See § "One
+    │                         #   notebook, three environments".
+    ├── threshold.py          # [now] τ, in ONE place: tune() (fallback when a repo exposes none) ·
+    │                         #   apply() dispatches on the rule SHAPE (v1 segmented / v2 piecewise /
+    │                         #   v3 global) · read_off() — see § "τ has two sources"
     ├── docs/STRUCTURE.md · DESIGN.md · ENV_MANAGEMENT.md
     │
     ├── pipeline/
@@ -24,8 +38,11 @@ repo/
     ├── detector/             # "is there a loop?"        — (scores, labels); never opens a pkl
     │   ├── sfp_detector.py
     │   └── algorithm/
-    ├── estimator/            # [plan] "how bad / by what mechanism?" — see § "Five layers"
-    │   ├── effect_estimator.py    # EffectEstimator ABC: assumptions() + falsify() + estimate()
+    ├── estimator/            # "how bad / by what mechanism?" — see § "Five layers"
+    │   ├── concentration.py       # [now] Hill / Shannon / Simpson / Gini / top-k on mean|φ|, plus
+    │   │                          #   require_comparable() — refuses versions attributed under
+    │   │                          #   different SHAP backends. L0 names only.
+    │   ├── effect_estimator.py    # [plan] EffectEstimator ABC: assumptions() + falsify() + estimate()
     │   ├── rdd.py                 # notebook 04_01 — τ as a sharp discontinuity (needs payout)
     │   ├── shap_did.py            # notebook 04_02 — corruption footprint in the feature-dependence
     │   └── logit_adjust.py        # notebook 04_03 — conditional odds ratio; falsify() FAILS by design
@@ -37,17 +54,27 @@ repo/
     │   ├── reevaluator.py         # ReEvaluator: composes detector/estimator over (before, after)
     │   └── metrics/               # ReEvalMetric ABC → DecisionFlipCount · DetectionDelta ·
     │                              #   ShapDiDDelta (footprint erased?) · OracleValidation (SYNTHETIC-ONLY)
-    ├── loaders/
-    │   └── base.py · synthetic.py · real.py
+    ├── loaders/              # [now] the ONE way a notebook reaches a version's artefacts
+    │   └── version_data.py   #   load(v) -> VersionData: .frame · .tau · .decisions · .features
+    │                         #   No synthetic/real subclasses — config's `source` handles that.
     │
     ├── scoring/              # VERSION LAYER — runs inside env-vX; the only code that opens a pkl
-    │   ├── ingest.py          # source log (manifest) → logs/<v>.parquet   ("ingest" = the doorway
-    │   │                      #   for external artefacts: their name → our canonical name)
-    │   ├── build_inputs.py    # logs/<v>.parquet → inputs/{features,labels}_<v>
+    │   ├── ingest.py          # log_source → log   ("ingest" = the doorway for external artefacts:
+    │   │                      #   their FILE name AND their COLUMN names → ours, via schema.py)
+    │   ├── build_inputs.py    # canonical log → inputs/targets_<v>  (features are NOT carved from
+    │   │                      #   the log — they are the preprocessor pickle's output)
     │   ├── predict.py         # model + features → detection/<v>_scores
-    │   ├── attribute.py       # [plan] model + features → detection/<v>_attributions  (per-row |φ|;
-    │   │                      #   the sibling of predict.py — SHAP must run where the pkl unpickles)
-    │   ├── score_all.sh
+    │   ├── attribute.py       # [now] model + features → detection/<v>_attributions + _meta.json
+    │   │                      #   (per-row φ; the sibling of predict.py — SHAP must run where the
+    │   │                      #   pkl unpickles). Backends: shap TreeExplainer (interventional,
+    │   │                      #   shared background) or the booster's own pred_contribs (needs no
+    │   │                      #   `shap` in a frozen env, but is tree-path-dependent). The meta
+    │   │                      #   records which — and the estimator's hyperparameters (§1.4c).
+    │   ├── score_all.py       # [now] driver: loops the versions, calls each env's interpreter.
+    │   │                      #   Replaced score_all.sh (deleted 2026-07-31).
+    │   ├── attribute_all.py   # [now] the attribution driver. Also picks ONE claim set (id-column
+    │   │                      #   intersection + seeded sample) so every version explains the same
+    │   │                      #   rows — otherwise a concentration shift can be case-mix.
     │   ├── load_scores.py
     │   └── inspect_pickle.py  # [now] standalone real-data onboarding util (Windows-portable): loads a
     │                          #   prod pickle (e.g. Z:/…/Prod-Predictions/inputs.pkl), reports schema +
@@ -57,12 +84,12 @@ repo/
     │   ├── base.py
     │   └── v1.py · v2.py · v3.py
     ├── training/             # VERSION LAYER — runs inside env-vX
-    │   ├── train.py           # BASELINE trainer (prep+model fresh on production label)
-    │   ├── retrain.py         # MITIGATED retrainer (reuse baseline prep, weighted)
-    │   ├── train_all.sh
+    │   ├── train.py           # BASELINE trainer — estimator only, on the production target
+    │   ├── retrain.py         # MITIGATED retrainer — clones baseline hyperparams, weighted
+    │   ├── train_all.py       # [now] driver; SKIPS any version whose paths.model is declared
     │   └── spec.py
-    ├── envs/
-    │   └── v1/ · v2/ · v3/
+    ├── envs/                 # specs + build notes only, no code (each vN/ also holds .venv/)
+    │   └── v1/ · v2/ · v3/    #  v1/requirements.txt records how env-v1 was REALLY built
     │
     ├── models/
     │   ├── synthetic/
@@ -99,7 +126,7 @@ repo/
 
 > **Directory reorganisation (decided 2026-07-03).** The old `src/data/scores/{features,labels}/` bag-of-artefacts and `src/model/envs/` were reorganised along two clean axes:
 > - **`src/model/` → `src/envs/`.** That directory only ever held per-version `.venv`s (no models live there — the pkls are elsewhere), so the name `model/` was misleading. Renamed to `envs/`, which is what it is. Source-agnostic (an env is a library stack), so it is **not** split by synthetic/real.
-> - **Data is split by *source* then *pipeline stage*:** `data/{synthetic,real}/{inputs,detection,mitigation,reeval}/`. `inputs/` holds the fixed *materials* (per-version `features_<v>` + `labels_<v>`); the three stage dirs hold pure *outputs* (`detection/` = baseline scores → detector; `mitigation/` = corrected targets ← mitigator; `reeval/` = post-retrain scores). ⚠️ `inputs/features_<v>` is the one file used by **both** scoring and retrain — it is a shared material, not a stage output, hence its own `inputs/` bucket. It is also the likely edit point if feature engineering is revisited.
+> - **Data is split by *source* then *pipeline stage*:** `data/{synthetic,real}/{inputs,detection,mitigation,reeval}/`. `inputs/` holds the fixed *materials* (per-version `features_<v>` + `targets_<v>`); the three stage dirs hold pure *outputs* (`detection/` = baseline scores → detector; `mitigation/` = corrected targets ← mitigator; `reeval/` = post-retrain scores). ⚠️ `inputs/features_<v>` is the one file used by **both** scoring and retrain — it is a shared material, not a stage output, hence its own `inputs/` bucket. It is also the likely edit point if feature engineering is revisited.
 > - **Model pkls leave `data/` entirely → `src/models/{synthetic,real}/{baseline,mitigated}/`.** A fitted `.pkl` is a model artefact, not data. `baseline/` = the version repo's code retrained on its **original (contaminated)** target = production reproduction; `mitigated/` = the same code retrained on the **corrector's de-contaminated** target. Folder carries the meaning → filename is just `v<k>.pkl`.
 >
 > **Why baseline pkls are ours to regenerate, not vendored.** Industry convention: code lives in git, **fitted model binaries do not** (they bloat history, don't diff, and are reproducible from code + data + pinned env — they belong in a model registry / object store). The version repos under `model_repos/` are therefore treated as **code only**; every pkl this project scores — baseline *and* mitigated — is **regenerated here** by retraining from that repo's code in its pinned env. Hence both land in `src/models/`, and `model_repos/` is never written to.
@@ -110,9 +137,9 @@ repo/
 
 > **Note — synthetic tests read ONLY `data/synthetic/generate/` (added 2026-07-06; ~~superseded 2026-07-14~~).** ⚠️ **The restrictive half of this note is retired — see § "Three worlds" and § "The one invariant" below.** Notebooks may now use **anything** under `src/data/synthetic/`, including `generate.*`. What survives from the original note, and is still true: the `logs/` · `inputs/` · `detection/` · `mitigation/` · `reeval/` subtrees are **not a dataset anyone analyses** — they are a synthetic **dry-run of the real-data pipeline**, materialised only to pin down and validate the application wiring (source→stage layout; ingest/build/score/retrain) **before** any real Allianz resource is connected. Once real data arrives it flows through the identical `data/real/{logs,inputs,detection,mitigation,reeval}/` tree. Treat them as scaffolding for the real-data integration.
 
-> **Note — log ingestion is the one name-translation point (added 2026-07-06).** Each model application emits its production log under whatever name IT chose (`log_v2.parquet` here; on real data e.g. `v2_prod_scored_2025Q1.parquet`). This pipeline expects one canonical per-version name, `logs/<v>.parquet`. `scoring/ingest.py` is the SINGLE place that translates "their name → our name": it reads the source path from `data/<source>/logs/manifest.json`, validates the required schema (`claim_id`, `observed_outcome`, `true_garage_outcome`, `model_<v>_decision`), and archives a copy as `logs/<v>.parquet`. Everything downstream (`build_inputs.py`) reads only the canonical `logs/`, so when a file name changes you edit `manifest.json` alone — no pipeline code changes.
+> **Note — log ingestion is the one name-translation point (added 2026-07-06; ~~manifest.json~~ → config, and the translation extended to COLUMNS, 2026-07-31).** Each model application emits its production log under whatever name IT chose, with whatever column names IT chose. `scoring/ingest.py` is the SINGLE place that translates both into ours: it reads `config.path("log_source", v)`, renames the columns via `schema.to_canonical`, checks the required ones survived (`schema.require`, which names the offending config entry when one did not), and writes `config.path("log", v)`. Everything downstream reads only the canonical log. `logs/manifest.json` is retired — the source path is now `paths.log_source` in config, so the file name and the column names are edited in the same one place.
 
-> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/{ingest,build_inputs,predict}.py`, `score_all.sh`, `load_scores.py`); the **training I/O** (`training/train.py` = baseline trainer, `training/retrain.py` = mitigated retrainer, `train_all.sh`); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
+> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/{ingest,build_inputs,predict}.py`, `score_all.py`, `load_scores.py`); the **training I/O** (`training/train.py` = baseline trainer, `training/retrain.py` = mitigated retrainer, `train_all.py`); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
 
 > **Per-version features, built through each version's own repo (both sources).** Each version is scored on its own `inputs/features_<v>.parquet`, produced by **that version's repo preprocessing** — the `preprocessing/v{1,2,3}.py` adapters run each repo's feature builder. This is now **identical for synthetic and real** (decided 2026-07-03): synthetic is only a temporary stand-in, so it goes through the *same* external-repo path, not a special shared recipe. The single difference is where the raw claims come from — synthetic **generates** them (`data/synthetic/` DGP), real **receives** them from Allianz. Because v1/v2/v3 preprocessing genuinely diverges (`V2/V3FeatureBuilder`; `problem.md` §2.5 #10/#11), `features_<v>` files differ across versions on **both** sources. See `DESIGN.md` § "Per-version feature matrices". **This invariant is load-bearing and must be kept** — see § "What synthetic cannot rehearse" below.
 
@@ -160,13 +187,71 @@ logic apart on synthetic data; coupling them to the DGP costs nothing, because w
 only their *data paths* change. Application code is different: it must survive the deletion of
 `data/synthetic/`, so it may only ever touch canonical artefacts.
 
+## Paths are resolved by KIND, never by filename (added 2026-07-31)
+
+The three real version repos have **different internal structures** — different folder names,
+different pickle filenames, different column names, different places for the production log. So
+`src/` code may not name a file; it names a **kind** and a **version**, and `config.py` answers with
+a path.
+
+```python
+config.path("model",    "v2")          # -> that version's pickle, wherever it really lives
+config.path("features", "v2")          # -> that version's feature matrix
+config.path("scores",   "v2")          # -> where WE write its recomputed scores
+config.column("v2", "date")            # -> "ReportedDate"   (v1: "lossdate", v3: "ReportedDate_CLAIM")
+```
+
+`KINDS` splits in two, by **who made the artefact** — not by who it belongs to:
+
+| | kinds | resolution |
+|---|---|---|
+| `READ_KINDS` | `model` · `log` · `features` · `targets` · `raw_input` | already exist in the real repo → **declared** per version in `VERSIONS[v]["paths"]` |
+| `WRITE_KINDS` | `scores` · `attributions` · `corrected` · `mitigated` · `reeval_scores` | this project produces them → **`FALLBACK`** template under our own tree |
+
+**A declared path always beats the template, for every kind.** That is the whole point: a kind moves
+from "we generate it" to "the real repo already has it" by filling in one line of config, with no
+code change anywhere. `paths.model` is the live example — leave it blank and we score a baseline pkl
+we retrained ourselves; fill it in and we score that version's real production pickle. **v1 must take
+the second route** (its training data was destroyed, so it can only ever be loaded), while v2/v3 could
+go either way — the config expresses both without branching.
+
+**Columns are translated once, at ingest.** `VERSIONS[v]["columns"]` maps our canonical name →
+that version's real name (`config.rename_map(v)` hands back the `df.rename` dict). Downstream code
+only ever says `claim_id` / `date` / `score` / `decision` / `observed` / `mobility`. A version that
+genuinely lacks a column declares `None` rather than a placeholder — v2 and v3 have no `mobility`,
+because only v1's decision rule is segmented on it.
+
+**The kind is `targets`, not `labels`.** What a version was trained against is *not* a ground
+truth — for v2 and v3 it is the previous model's `observed_outcome`, forced to 1 for every scrapped
+car. Calling it `labels` invites reading it as truth, which is the exact error the whole project is
+about. (The fallback filename follows: `inputs/targets_<v>.parquet`. The legacy synthetic dry-run
+still has `labels_<v>.parquet` on disk — rename those, or declare the path, if ② is ever re-run.)
+
+**Synthetic names are gone from application code (2026-07-31).** `config.VERSIONS[v]["columns"]
+["observed"]` briefly carried `pre_ml_label` / `model_v1_observed_outcome` / `model_v2_observed_outcome`
+marked "confirmed". They are **synthetic DGP column names** — they sit in
+`src/data/synthetic/csv/claims_v1_log.csv`, not in any Allianz log — and were reset to placeholders.
+`trained_on` survives as a concept (the contamination chain `pre_ml -> v1 -> v2`), no longer as a
+column name. `config.FEATURE_COLS` / `CATEGORICAL_COLS` were deleted for the same reason: the DGP's
+schema had no business in a real-data config, and nothing imported them. Notebooks still import
+`SCRAP_THRESHOLD` and `TARGET_PRECISION`, so those stay. The oracle column `true_garage_outcome` is
+now **optional everywhere** (`pipeline.py --oracle-col`, off by default) rather than required, since
+real data cannot have it: a scrapped car is never sent to a garage.
+
+**What this does NOT unify:** the decision rule. `DECISION_RULES` keeps v1 segmented, v2
+piecewise, v3 global, because that is a difference in *meaning*, not in naming — see § "τ has two
+sources". Config unifies names; it must never flatten semantics.
+
+`python src/config.py` reports remaining placeholders; `--paths` and `--columns` print the full
+resolved mapping.
+
 ## Five layers, split by which artefacts each one opens
 
 The layer boundaries are not conceptual — they follow mechanically from **what each layer must read**:
 
 | layer | reads | answers | opens a pkl? |
 |---|---|---|---|
-| `detector/` | `detection/<v>_scores` + `inputs/labels_<v>` | **Is there a loop?** | no |
+| `detector/` | `detection/<v>_scores` + `inputs/targets_<v>` | **Is there a loop?** | no |
 | **`estimator/`** ★ | the above + `detection/<v>_attributions` + τ | **How harmful? By what mechanism?** | **no** — see below |
 | `mitigator/` | `inputs/{features,labels}_<v>` | **How do we fix it?** | no |
 | **`reeval/`** ★ | **TWO artefact sets** (before + after) | **What changed?** | no |
@@ -179,6 +264,47 @@ from the analysis `.venv` raises `ModuleNotFoundError: fttl_v1`, and this will b
 real pkls). So attribution runs in the Version Layer — **`scoring/attribute.py`, the sibling of
 `predict.py`** — and emits `detection/<v>_attributions.parquet`. `estimator/` then reads that parquet
 and never touches a model. The two-layer split is preserved.
+
+**Built 2026-08-01** (`attribute.py` · `attribute_all.py` · `estimator/concentration.py` ·
+`notebook/real/00_shap_attribution.ipynb`, guide in `notebook/real/README.md`). Three things the
+implementation had to decide, all of them recorded in the per-run `<v>_attributions_meta.json` rather
+than assumed:
+> - **Which TreeSHAP.** Interventional against a *shared* background makes a cross-version difference
+>   a difference in the model **function**; the booster's own `pred_contribs` needs no `shap` package
+>   in a frozen version env but is **tree-path-dependent**, so part of any difference is a training
+>   distribution. `concentration.require_comparable()` **raises** on a mixed set — silently mixed
+>   backends produce a plausible-looking number.
+> - **Which rows.** `attribute_all.py` intersects the versions' `claim_id`s and samples once, so every
+>   version explains the same claims; `--per-version-sample` is available but warns, because it makes
+>   every difference case-mix confounded.
+> - **Which configuration produced it.** The estimator's hyperparameters are captured in the meta, so
+>   the notebook can print them beside the concentration figures — the standing requirement of
+>   `problem.md` §1.4c (no adjacent version pair is configuration-matched, and L1 concentrates
+>   importance by construction).
+
+### One notebook, three environments (added 2026-08-01)
+
+Everything above concerns *headless* Version-Layer work. There is a second, equally legitimate way to
+use a version env: **`notebook/real/00_SHAP.ipynb` runs interactively inside it**, opens that
+version's pickle and produces the whole single-version SHAP analysis — feature-space profile, input
+distributions either side of the cutoff, global bar / beeswarm / magnitude beeswarm, dependence,
+per-claim waterfall + force, and mean|φ| by score band.
+
+It is **one file, run three times on three kernels**, not three notebooks. It names no version: it
+detects which one it is from the interpreter path and reads the rest from `config`. Two constraints
+follow from where it runs, and `src/shap_kit.py` exists to absorb them:
+
+> - **The library floor is numpy + pandas + matplotlib.** The envs span **xgboost 0.72 / 1.4.2 /
+>   3.2.0** — seven years — so `shap.plots.beeswarm` and the `Explanation` object cannot be assumed
+>   to exist. Every figure is drawn from the raw φ matrix. `shap` is used for the *values* when
+>   present, with the booster's own `pred_contribs` as the fallback.
+> - **A wrong kernel must fail, not plot.** `config.VERSIONS[v]["xgboost"]` pins each version's
+>   release and `shap_kit.env_report(strict=True)` raises on a mismatch — loading a pickle under the
+>   wrong stack otherwise yields a complete set of plausible figures for the wrong model.
+>
+> It writes the *same* `detection/<v>_attributions.parquet` + `_meta.json` as `attribute.py`, so the
+> interactive and headless routes are interchangeable and `00_shap_attribution.ipynb` (the
+> cross-version comparison) reads whichever produced them.
 
 **Why `estimator/` mandates `assumptions()` and `falsify()`.** RDD and DiD are identified only under
 assumptions that are, in general, **untestable** (parallel trends; continuity at the cutoff). P7's
@@ -255,6 +381,14 @@ fitted `prep` verbatim; only the label may differ") to the split and the cutoff 
 > **@TODO** `train.py` / `retrain.py` currently make **no validation split at all** and tune **no τ**.
 > Both are needed before `DecisionFlipCount` can run on the app path.
 
+**Built 2026-07-31.** `threshold.py` exists and the three functions behave as specified. `apply()`
+**refuses** rather than degrades: asked for v1 on a frame with no `mobility` column it raises, because
+silently applying one cutoff would mislabel every immobile vehicle in the (0.75, 0.85] band. Same for
+v2 without `date` — pooling the two regimes conflates two treatment assignments. `read_off()` returns
+`deterministic` alongside τ, which is the one-line positivity test to run first on real data.
+Notebooks should stop importing `SCRAP_THRESHOLD` (v2's pre-2026-07 cutoff only) and call
+`load(v).tau` or `threshold.apply(v, df)`.
+
 ## Positivity is dead at τ — a constraint on the whole mitigation layer
 
 Measured on the DGP (v2a, 2022+, 23,225 rows), and **this is a property of the data, not of any
@@ -323,10 +457,10 @@ Scoring and analysis are decoupled — they never share a process. See `DESIGN.m
 ```
 [ Data preparation — run once, upstream of scoring ]
 
-  ingest.py        source log (logs/manifest.json)  → data/synthetic/logs/<v>.parquet        (canonical name)
-  build_inputs.py  logs/<v>.parquet split           → data/synthetic/inputs/{features,labels}_<v>.parquet
-  train_all.sh     features_<v> + production label   → models/synthetic/baseline/<v>.pkl      (BASELINE, each in env-v)
-                              │  (train.py fits prep+model FRESH; baseline pkls are gitignored → regenerated here)
+  ingest.py        config.path("log_source", v)     → config.path("log", v)         (columns renamed to ours)
+  build_inputs.py  canonical log                    → config.path("targets", v)
+  train_all.py     features_<v> + production target → config.path("model", v)       (BASELINE, each in env-v)
+                              │  (SKIPPED where paths.model is declared — that version's real pickle is used)
                               ▼
 [ Scoring — run once per version, each in its OWN env ]
 
@@ -376,9 +510,9 @@ Analysis env   SFPDetector(baseline_scores vs mitigated_scores) → SFP metric d
 When a new version (e.g., v4) arrives with different dependencies:
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock`) and build the env (`uv sync` in that dir, or `uv venv` + `uv pip install -r`)
-2. Add `"v4": "<path to v4's emitted log>"` to `data/<source>/logs/manifest.json`, then `python src/scoring/ingest.py` (→ `logs/v4.parquet`) and `python src/scoring/build_inputs.py` (→ `inputs/{features,labels}_v4.parquet`)
-3. Regenerate the baseline pkl into `models/<source>/baseline/v4.pkl` by running `train.py` in `env-v4` (add a v4 line to `train_all.sh`)
-4. Add one `uv run --project src/envs/v4 python src/scoring/predict.py … --features data/<source>/inputs/features_v4.parquet --version v4` line to `score_all.sh`
+2. Add a `"v4"` entry to `config.VERSIONS` + `VERSION_LABELS` (its `paths`, its `columns` mapping), then `python src/scoring/ingest.py` (→ canonical log) and `python src/scoring/build_inputs.py` (→ `inputs/targets_v4.parquet`)
+3. Either declare `paths.model` (v4 ships its own production pickle — nothing to train) or run `python src/training/train_all.py --versions v4`
+4. Nothing. `score_all.py` loops `config.VERSION_LABELS`, so registering v4 in config already added it
 5. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis
 
 No new class required. `ingest.py`, `build_inputs.py`, `train.py`, `predict.py`, `retrain.py`, and `load_scores.py` are all version-agnostic and run unchanged — the active env plus the CLI args (`--model`, `--features`, `--labels`, `--version`) decide which version is trained, scored, or retrained.

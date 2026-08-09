@@ -28,7 +28,26 @@ This project runs **two kinds of environment** with **opposite lifecycles**, so 
 | Tier | What runs in it | uv mechanism | Spec files | Lifecycle |
 |---|---|---|---|---|
 | **Analysis env** (`.venv`) | The SFP pipeline, detector, mitigator, EDA, notebooks — everything that does **not** load a model | `uv add` / `uv sync` | `pyproject.toml` + `uv.lock` (repo root) | **Evolving** — packages added as research grows |
-| **Per-version model envs** (`env-v1`, `env-v2`, `env-v3`) | Anything that loads or builds **one** version's model: `train.py` (baseline), `retrain.py` (mitigated), `predict.py` (scoring) — offline | one independent env per version | one **independent** pinned spec per version | **Frozen** — write-once; rebuilt only to reproduce, never casually mutated |
+| **Per-version model envs** (`env-v1`, `env-v2`, `env-v3`) | Anything that loads or builds **one** version's model: `train.py` (baseline), `retrain.py` (mitigated), `predict.py` (scoring), `attribute.py` (per-row SHAP) — offline | one independent env per version | one **independent** pinned spec per version | **Frozen** — write-once; rebuilt only to reproduce, never casually mutated |
+
+> **`shap` in a frozen env (2026-08-01).** `scoring/attribute.py` is the one Version-Layer script with an optional *extra* dependency, so it is also the one place the "frozen" rule gets tested. Two routes, and the choice is recorded in the run's meta JSON rather than left implicit:
+> 1. `uv pip install shap` into `src/envs/v<k>/.venv`. `shap` pins nothing in the numeric stack, so the reproduction survives — but do it for **all three** envs or none, because comparing versions across different SHAP backends is what `estimator.concentration.require_comparable()` refuses.
+> 2. `--backend native`, which uses the booster's own `pred_contribs` and adds **nothing** to the env. The cost is methodological, not operational: it is tree-path-dependent, so part of any cross-version difference is a difference in training distributions rather than in the model function.
+>
+> Whichever route, that rule holds for the headless path.
+
+> **Revised the same day: a version env may host a notebook after all.** The rule above ("keep plotting libraries out") was written for `attribute.py`, which is headless. `notebook/real/00_SHAP.ipynb` is the deliberate exception — the *single-version* SHAP analysis is interactive and must open the pickle, so it runs on a kernel built on the version's own `.venv`:
+> ```bash
+> src/envs/v2/.venv/bin/python -m pip install ipykernel matplotlib pandas pyarrow
+> src/envs/v2/.venv/bin/python -m ipykernel install --user --name fttl-v2 --display-name "FTTL v2 (env-v2)"
+> ```
+> This is a real, accepted cost: `ipykernel` + `matplotlib` enter a frozen env. It is acceptable because **neither pins anything in the numeric stack** — the pins that define the reproduction are `xgboost` (0.72 / 1.4.2 / 3.2.0), `numpy` and `scikit-learn`, and none of them move. What must still be resisted is `uv add`-ing analysis libraries (statsmodels, dowhy, seaborn, a newer pandas) into a version env to make a notebook cell work: that is where the stack drifts. If a cell needs one, it belongs in the analysis `.venv`, reading the parquet the version env wrote.
+>
+> `src/shap_kit.py` is what keeps the cost this low — it imports only numpy/pandas/matplotlib and draws every SHAP figure from the raw φ matrix, so no version env needs a `shap` release new enough to have `shap.plots.*`. It also asserts, at the top of every run, that the kernel's xgboost matches `config.VERSIONS[v]["xgboost"]`.
+>
+> **`shap` remains genuinely optional, with one degraded feature.** Values fall back to the booster's `pred_contribs`; **interaction** values fall back to `pred_interactions`, which arrived in **xgboost 0.81** — so on env-v1 (0.72) there is no native route and the interaction section needs `shap` installed there or it is skipped (the notebook says so and falls back to a correlation proxy for its dependence-plot colours). Installing `shap` into a version env stays preferable to relaxing any numeric pin.
+>
+> Kernel registration commands for all three envs, macOS and Windows, are in `SETUP.md` § "Jupyter kernels — one per version env", together with what to do when `xgboost==0.72` refuses to install on the platform.
 
 ### Why the analysis env uses `uv add` + `pyproject.toml` + `uv.lock`
 
@@ -110,6 +129,76 @@ uv pip install --python src/envs/v3/.venv/bin/python -r src/envs/v3/requirements
 ( cd src/envs/v3 && uv sync )
 ```
 
+### Making the version repo importable — the `fttl.pth` step *(added 2026-08-06)*
+
+The build commands above are generic. The interpreters the **real** envs were actually built on
+differ per version: **env-v1 = 3.5.6 (conda `-p`, so `python.exe` sits at the env root, not in
+`Scripts\`), env-v2 = 3.10, env-v3 = 3.11** — all confirmed on the company laptop 2026-08-06.
+Only v1's deviation is forced (uv does not support < 3.6); v2/v3 follow their repos' own pins.
+
+Installing the pins is only half of building a per-version env. The env must also be able to
+`import` the version repo's own modules, because that is what unpickles its model (§ "Scoring
+with the right env"). Two distinct facts make this its own step:
+
+- **The version repos are not packages.** They are analysis code with no `[tool.setuptools]`
+  declaration and (v1, v2) no `__init__.py` anywhere. At Allianz they were run *from inside* the
+  repo, so the running script's own folder was on `sys.path` automatically and nothing needed
+  installing. Importing them from outside means putting those folders back on `sys.path`.
+- **`uv pip install -e <repo>` does both jobs in one command** — installs `[project.dependencies]`
+  *and* registers the repo on `sys.path` — so when the second half fails the pins are not
+  installed either. v3 succeeds (one top-level candidate ⇒ setuptools' flat-layout discovery
+  resolves it, leaving `__editable__.p146_fttl_product-*.pth` in its site-packages). **v2 fails**:
+  its root holds several sibling directories, discovery refuses to choose, and the whole install
+  aborts. Adding `[tool.setuptools]` / `py-modules = []` to that repo's `pyproject.toml` disables
+  discovery so the dependency half proceeds. That edit lives in the clone, which is gitignored
+  (`/model_repos/`), so it does not survive a re-clone — hence this note.
+
+The `sys.path` half is therefore done by hand, per env, and it is **the same procedure for v1 and
+v2** — only the interpreter and the repo path differ. Ask that env's interpreter where its
+`site-packages` is, then write one file there named `fttl.pth`:
+
+```bash
+# ① where does this env's .pth go? (v1: .venv\python.exe — conda puts it at the env root)
+src/envs/v2/.venv/Scripts/python.exe -c "import sysconfig;print(sysconfig.get_paths()['purelib'])"
+```
+
+`<that dir>/fttl.pth` then holds one **absolute** path per line — the repo root plus every
+subdirectory that holds `.py` files:
+
+```
+# fttl v2 repo paths
+C:\...\model_repos\real\fttl-v2
+C:\...\model_repos\real\fttl-v2\<subdir with .py>
+```
+
+Verify in a **fresh** process (a `.pth` is read only at interpreter startup):
+
+```bash
+src/envs/v2/.venv/Scripts/python.exe -c "import sys;print([p for p in sys.path if 'model_repos' in p])"
+```
+
+Five things about that file, each learned the hard way:
+
+- **Subdirectories, not just the root.** Registering only the root makes `import analysis.helpers`
+  work but not `import helpers` — and flat sibling imports are exactly the style implied by the
+  absence of `__init__.py`. The goal is to **reproduce the `sys.path` shape the pickle was written
+  under**, not to restructure the repo into a proper package: a pickle stores its classes'
+  module paths as strings, so changing how the repo is imported breaks `load()`. For the same
+  reason, **do not add `__init__.py` to the version repos** — it would not fix the `-e` failure
+  (5 declared packages still cannot be auto-chosen) and it renames the very modules the pickle
+  asks for.
+- **One filename, every env.** `fttl.pth` in all three: each env has its own `site-packages`, so
+  they never collide, and a fixed name makes rewriting idempotent instead of accumulating stale
+  path entries under variant names.
+- **A nonexistent path in it is skipped silently** — a typo produces no error and no effect, which
+  is why the verification step above is not optional.
+- **Name collisions resolve by path order, silently.** If two registered directories both hold
+  `utils.py`, `import utils` picks whichever line comes first. Prefer registering only the
+  directories actually needed.
+- **First line a comment.** If the file is written in Notepad it may gain a UTF-8 BOM, which would
+  corrupt the first line; `.pth` ignores lines starting with `#`, so the BOM lands somewhere
+  harmless.
+
 ---
 
 ## Scoring with the right env (offline, one process per version)
@@ -128,7 +217,9 @@ uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/sy
     --out src/data/synthetic/detection/v2_scores.parquet
 ```
 
-`src/scoring/score_all.sh` wraps all three versions. The script is **version-agnostic** — the active env plus the CLI args decide which version is scored. See `DESIGN.md` for the full design and the superseded runtime-subprocess alternative.
+`src/scoring/score_all.py` wraps all three versions (it supersedes `score_all.sh`). The script is **version-agnostic** — the active env plus the CLI args decide which version is scored. It is Python rather than bash for two reasons: it reads `config.py` natively to resolve every path by *kind* (bash cannot import it — see `STRUCTURE.md` § "Paths are resolved by KIND"), and the company laptop is Windows, where `.sh` does not run. It selects each env by calling `config.python_bin(version)`, so the interpreter paths above are declared in one place rather than repeated per call site. See `DESIGN.md` for the full design and the superseded runtime-subprocess alternative.
+
+`src/training/train_all.py` is its counterpart for baseline training (it replaced `train_all.sh`, deleted 2026-07-31). It **skips any version whose `config.VERSIONS[v]["paths"]["model"]` is declared** — that version already ships its own production pickle, and retraining would substitute an approximation for a measured artefact. v1 is permanently in that category: its training data was destroyed, so its baseline cannot be rebuilt at all.
 
 **Training, re-training and preprocessing also run in the per-version env.** `src/training/train.py` (baseline pkl), `src/training/retrain.py` (mitigated pkl, re-evaluation) and `src/preprocessing/v{1,2,3}.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py` — because all load or build that version's model and so need its repo importable. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. The **log-ingestion** step (`scoring/ingest.py` → `logs/<v>.parquet`) and the log→inputs split (`build_inputs.py`) touch no model and run in the analysis `.venv`. The standalone real-data onboarding util **`scoring/inspect_pickle.py`** (loads a prod pickle to report its schema + date range) is env-dependent by *content*, not by design: a plain-data DataFrame pickle loads in the analysis `.venv`, but if the pickle proves to hold a fitted model / custom classes it must be opened in that version's env (same rule as `predict.py`). It self-diagnoses the two traps — a `numpy._core` error ⇒ the writer used numpy ≥ 2.0 (match the major version), a missing repo module ⇒ a model pickle needing its version env. Note *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
 
@@ -163,8 +254,8 @@ Commit `pyproject.toml` + `uv.lock` (analysis), and each version's spec files, s
 ## Adding a new model version (e.g., v4)
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env.
-2. Register v4's emitted log in `data/<source>/logs/manifest.json`, then run `ingest.py` + `build_inputs.py` to produce `data/<source>/inputs/{features,labels}_v4.parquet` (on synthetic, `export_version_features` also emits features once the version is registered). Regenerate `src/models/<source>/baseline/v4.pkl` by running `train.py` in `env-v4` (add a v4 line to `train_all.sh`).
-3. Add one scoring line for v4 to `src/scoring/score_all.sh`.
+2. Add a `"v4"` entry to `config.VERSIONS` (and to `VERSION_LABELS`): its `paths`, its `columns` mapping, its `python`. Run `python src/config.py` to confirm nothing is left as a placeholder.
+3. Run `ingest.py` then `build_inputs.py` to produce `data/<source>/inputs/targets_v4.parquet`.
 4. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis.
 
-No new class is required — `ingest.py`, `build_inputs.py`, `train.py`, `predict.py`, and `load_scores.py` are all version-agnostic. See `DESIGN.md`.
+No new class is required, and **no driver script is edited** — `score_all.py` and `train_all.py` loop `config.VERSION_LABELS`, so registering the version in config is what adds it to the run. `ingest.py`, `build_inputs.py`, `train.py`, `predict.py` and `load_scores.py` are all version-agnostic. See `DESIGN.md`.
