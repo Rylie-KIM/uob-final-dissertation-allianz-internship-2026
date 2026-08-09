@@ -82,6 +82,7 @@ def read_mapping(excel: Path, sheet: str):
     mapping: dict[int, dict[str, str]] = {}
     problems: list[str] = []
     skipped: list[str] = []
+    warnings: list[str] = []
 
     for version, (icol, ncol) in LAYOUT.items():
         if max(icol, ncol) >= df.shape[1]:
@@ -125,16 +126,21 @@ def read_mapping(excel: Path, sheet: str):
             else:
                 seen[name] = idx
 
-    # an index present in a single version only is not a *common* feature — usually a row
-    # slipped during hand-editing
+    # An index present in a single version only is not a *common* feature. Downgraded from a
+    # write-blocking problem to a WARNING (2026-08-09, decided on the company laptop): the real
+    # sheet legitimately carries a few indexed version-unique rows (7 v2-only, 2 v3-only at last
+    # run). They are excluded from the written JSON in main(). ⚠️ Still eyeball the sheet around
+    # these indices when the count changes: a slipped row shows up here as orphans, and the
+    # dangerous half of a slip — neighbouring indices paired to the WRONG counterpart — is not
+    # detectable mechanically.
     for idx in sorted(mapping):
         if len(mapping[idx]) == 1:
             (only,) = mapping[idx]
-            problems.append(
+            warnings.append(
                 f"index {idx} maps only {only} ({mapping[idx][only]!r}) — not common to any pair"
             )
 
-    return mapping, problems, skipped
+    return mapping, problems, skipped, warnings
 
 
 def validate_against_registry(mapping: dict[int, dict[str, str]]):
@@ -183,7 +189,11 @@ def summarise(mapping: dict[int, dict[str, str]]) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    # NOT `__doc__.split(...)`: __doc__ is None under `python -OO` (and in any copy whose
+    # docstring was stripped), which turns --help into an AttributeError at startup.
+    p = argparse.ArgumentParser(
+        description="Build features/feature_overlap.json from the hand-confirmed Excel mapping."
+    )
     p.add_argument("--excel", default=str(DEFAULT_EXCEL))
     p.add_argument("--sheet", default=DEFAULT_SHEET)
     p.add_argument("--out", default=str(DEFAULT_OUT))
@@ -198,7 +208,7 @@ def main() -> None:
             f"point --excel at it."
         )
 
-    mapping, problems, skipped = read_mapping(excel, a.sheet)
+    mapping, problems, skipped, warnings = read_mapping(excel, a.sheet)
     notes, reg_problems = validate_against_registry(mapping)
     problems += reg_problems
 
@@ -206,6 +216,11 @@ def main() -> None:
         print("skipped (no integer index — header rows are expected here):")
         for s in skipped:
             print(f"  - {s}")
+
+    if warnings:
+        print(f"\n{len(warnings)} warning(s) — single-version rows, excluded from the JSON:")
+        for w in warnings:
+            print(f"  ⚠ {w}")
 
     for n in notes:
         print(f"note: {n}")
@@ -225,7 +240,8 @@ def main() -> None:
 
     out = Path(a.out)
     payload = {str(idx): {v: mapping[idx][v] for v in VERSIONS if v in mapping[idx]}
-               for idx in sorted(mapping)}
+               for idx in sorted(mapping)
+               if len(mapping[idx]) > 1}       # single-version rows: warned above, not written
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nwrote {out}  ({len(payload)} entries)")
 
