@@ -579,58 +579,65 @@ DECISION_RULES: dict[str, dict] = {
         # on mobility — a confounded but usable overlap band. Above 0.85 there are no garage rows.
         "overlap_band": (0.75, 0.85),
     },
-    # v2 is a SINGLE global cutoff, but it CHANGED mid-production and was not reverted.
-    # Piecewise-constant: 0.872 up to the break, 0.825 after (read from v2 score.py, 2026-07-29).
+    # v2 is a SINGLE global cutoff, but it MOVED repeatedly across production life. Not one break
+    # and not a revert: FOUR changes are on record (user-supplied 2026-08-18), so the v2 log is
+    # FIVE policy regimes deep, and it alternates — 0.872 and 0.825 each appear twice.
     #
-    # BREAK = 2026-06-30 14:30 UK local time (BST, UTC+1) = 2026-06-30 13:30Z (user-confirmed
-    # 2026-07-31). It is an INTRA-DAY instant, not a date. 2026-06-30 therefore spans BOTH
-    # regimes, so it cannot be assigned to either as a whole day.
+    #     ...        -> 2021-06-03   0.8915    (era start unknown: regime open on the left)
+    #     2021-06-03 -> 2024-06-02   0.872
+    #     2024-06-02 -> 2026-02-25   0.825
+    #     2026-02-25 -> 2026-06-30   0.872      (16:26 UK local on the 25th)
+    #     2026-06-30 -> ...          0.825      (14:30 UK local = 13:30Z, BST)
+    #
+    # Two of these are known to intra-day precision (2026-02-25 16:26, 2026-06-30 14:30 UK local);
+    # the 2021 and 2024 changes are known to the day only. The code works in WHOLE DAYS throughout:
+    # the change date itself belongs to the NEW regime. The cost is at most one morning of claims
+    # per break labelled with the incoming threshold when they were decided under the outgoing one.
+    # Modelling it properly would need the log to carry timestamps AND their timezone, and neither
+    # is guaranteed.
+    #
+    # ⚠️ SUPERSEDES the earlier "one break, 0.872 -> 0.825" reading and the
+    # `known_unmodelled_break` entry that stood in for the unrecoverable 2024/2026-02 history.
+    # That gap is now CLOSED: the prior 0.825 era began 2024-06-02. Only the FIRST era's start is
+    # still unknown, and that regime is left open on the left, so it cannot mislabel anything.
     #
     # -----------------------------------------------------------------------------------------
-    # ⚠️ NOTE, DELIBERATELY NOT ENCODED (2026-07-31): an EARLIER change is known to exist —
-    #     2026-02-25 16:26 UK local (GMT, UTC+0 -> 16:26Z):  0.825 -> 0.872
-    # so 0.825 was in force for some period BEFORE that date too. How far back is UNKNOWN: the
-    # deployment/change record is broken before this point and cannot be recovered.
+    # ⚠️ CONSEQUENCE — the one that moved. v3's training window (2023-06-01 -> 2026-05-01) now
+    # CONTAINS TWO changes (2024-06-02 and 2026-02-25), not zero. The earlier claim "v3 trains on
+    # a policy-homogeneous log" is FALSE: v3's labels were generated under 0.872, then 0.825, then
+    # 0.872 again. v3's OOT slice (2025-12-01 -> 2026-05-01) straddles 2026-02-25 by itself.
+    # README §"threshold change" and problem.md §1.4/§4.6 still say "closed for v3" and must be
+    # rewritten — this is now a live confound for v3, not a documented gap.
     #
-    # It is left out of `regimes` on purpose. Encoding it would require a start date for the
-    # first 0.825 era, and inventing one would silently relabel years of v2 log rows on a guess —
-    # worse than the known, documented gap. `regimes` below therefore describes the period the
-    # record actually supports, and the first entry should be read as "0.872 as documented, for
-    # the span the record covers", NOT as a claim about all history.
-    #
-    # Consequence carried in the docs as a LIMITATION (README + paper §4.6), not as a retraction:
-    # v3's window (2023-06-01 -> 2026-05-01) and its OOT slice (2025-12-01 -> 2026-05-01) both
-    # CONTAIN 2026-02-25, so "v3 trains on a policy-homogeneous log" may not hold. It stands as
-    # the documented reading until the change record can be reconstructed.
+    # v2's OWN training window (2018-01-02 -> 2020-09-30) sits entirely before 2021-06-03, i.e.
+    # under v1's segmented rule — v2's regimes describe v2's SERVING history, never its labels.
     # -----------------------------------------------------------------------------------------
+    #
+    # PRACTICAL RULE, unchanged in kind but stricter in degree: any per-row analysis on the v2 log
+    # must restrict to ONE regime or carry the regime as a covariate. With five regimes and only
+    # two distinct thresholds, pooling now also risks a FALSE homogeneity — two eras agreeing on
+    # 0.872 are still two deployments years apart. `read_off()` reporting deterministic=False on a
+    # rule that is perfectly deterministic inside each regime is the symptom of pooling.
     "v2": {
         "shape": "piecewise_global",
-        # DATE-GRANULAR ON PURPOSE. The break really happened at 2026-06-30 14:30 UK local
-        # (= 13:30Z, BST on that date), and the earlier one at 2026-02-25 16:26 UK local
-        # (= 16:26Z, GMT). Those instants are recorded here as fact, but the code works in whole
-        # days: the whole of 2026-06-30 is assigned to the POST regime. The cost is at most one
-        # day of morning claims labelled 0.825 when they were decided at 0.872, which is not a
-        # difference any conclusion in this thesis turns on — and modelling it properly would
-        # require the log to carry timestamps AND their timezone, neither of which is guaranteed.
+        # Half-open [from, until) per regime, whole days, tiling the timeline with no gaps —
+        # threshold.apply() raises if a row falls outside every regime. The first regime carries
+        # no "from" — its era's start is unrecoverable, the deployment record is broken before it,
+        # and leaving it open is what stops that gap from mislabelling anything. The last regime
+        # carries no "until". Nothing may read regimes[0] as "the documented tau".
         "regimes": [
-            {"until": "2026-06-30", "threshold": 0.872},
+            {"until": "2021-06-03", "threshold": 0.8915},
+            {"from": "2021-06-03", "until": "2024-06-02", "threshold": 0.872},
+            {"from": "2024-06-02", "until": "2026-02-25", "threshold": 0.825},
+            {"from": "2026-02-25", "until": "2026-06-30", "threshold": 0.872},
             {"from": "2026-06-30", "threshold": 0.825},
         ],
-        "break_date": "2026-06-30",      # 14:30 UK local; see the note above
-        "break_date_confirmed": True,
-        # The earlier change, recorded but NOT applied — see the block comment above.
-        "known_unmodelled_break": {
-            "date": "2026-02-25",        # 16:26 UK local
-            "from_threshold": 0.825,
-            "to_threshold": 0.872,
-            "prior_era_start": None,     # unknown — deployment record broken, not recoverable
-            "reason_not_applied": "no start date for the prior 0.825 era; guessing one would "
-                                  "relabel years of log rows",
-        },
-        # Any per-row analysis on the v2 log must either restrict to one regime or carry the
-        # regime as a covariate. Silently pooling conflates two treatment assignments — and it
-        # shows up as read_off() reporting deterministic=False for a rule that is perfectly
-        # deterministic inside each regime.
+        # NOTE: there is deliberately no `breaks` list here. A break IS the boundary between two
+        # consecutive regimes — date, from-threshold and to-threshold are all readable off the
+        # spans above — so a literal copy would be a second source of truth free to drift out of
+        # sync with the first. config.breaks("v2") derives it instead. Every entry above is
+        # confirmed; an unconfirmed change would not be listed at all, which is why no per-entry
+        # `confirmed` flag exists either.
     },
     # v3 is a single global cutoff (confirmed 2026-07-29). Never deployed.
     "v3": {
@@ -639,6 +646,84 @@ DECISION_RULES: dict[str, dict] = {
     },
 }
 
+
+def regime_on(version: str, date) -> dict:
+    """The single regime in force on `date`, for a piecewise rule. Raises if none covers it.
+
+    Whole-day semantics, half-open [from, until) — the change date belongs to the NEW regime,
+    matching threshold.apply(). Use this instead of indexing `regimes` by position: v2 has five
+    regimes and two of them share a threshold, so `regimes[0]` is not "the documented tau" and
+    `regimes[-1]` is only "the tau in force today".
+    """
+    import datetime as _dt
+
+    rule = _decision_rule(version)
+    if rule["shape"] != "piecewise_global":
+        raise ValueError(f"[{version}] rule shape is {rule['shape']!r}, not piecewise_global")
+    d = _dt.date.fromisoformat(str(date)[:10])
+    for regime in rule["regimes"]:
+        if "from" in regime and d < _dt.date.fromisoformat(regime["from"]):
+            continue
+        if "until" in regime and d >= _dt.date.fromisoformat(regime["until"]):
+            continue
+        return regime
+    raise ValueError(
+        f"[{version}] {d} falls outside every declared regime — "
+        f"config.DECISION_RULES[{version!r}]['regimes'] must tile the timeline."
+    )
+
+
+def threshold_on(version: str, date) -> float:
+    """The scalar cutoff in force on `date`. Every shape except v1's segmented one."""
+    rule = _decision_rule(version)
+    if rule["shape"] == "global":
+        return float(rule["threshold"])
+    if rule["shape"] == "piecewise_global":
+        return float(regime_on(version, date)["threshold"])
+    raise ValueError(
+        f"[{version}] rule is {rule['shape']!r} — it has no single scalar cutoff. "
+        f"Use threshold.apply({version!r}, df), which reads the segmenting column."
+    )
+
+
+def breaks(version: str) -> list[dict]:
+    """The threshold changes, oldest first, DERIVED from consecutive regimes — never stored.
+
+    A break is the boundary between two regimes, so `date` is the later regime's "from" and the two
+    thresholds are the pair either side of it. Dates only: two of v2's four changes are known to the
+    minute, but nothing in this codebase works below whole-day resolution and a time field would
+    only invite code that pretends otherwise. The instants are recorded in the DECISION_RULES
+    comment as fact.
+    """
+    regs = _decision_rule(version).get("regimes", [])
+    return [
+        {"date": nxt["from"],
+         "from_threshold": prev["threshold"],
+         "to_threshold": nxt["threshold"]}
+        for prev, nxt in zip(regs, regs[1:])
+    ]
+
+
+def spans_a_break(version: str, start, end) -> list[dict]:
+    """The breaks strictly inside [start, end) — empty means that window is policy-homogeneous.
+
+    The question every training/OOT window has to answer before it is called single-regime.
+    """
+    import datetime as _dt
+
+    a = _dt.date.fromisoformat(str(start)[:10])
+    b = _dt.date.fromisoformat(str(end)[:10])
+    return [
+        brk for brk in breaks(version)
+        if a < _dt.date.fromisoformat(brk["date"]) < b
+    ]
+
+
+def _decision_rule(version: str) -> dict:
+    try:
+        return DECISION_RULES[version]
+    except KeyError:
+        raise KeyError(f"no decision rule declared for version {version!r}") from None
 
 # ======================================================================================
 # 5b. Training configuration  —  read off each repo's own training call
