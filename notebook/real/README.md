@@ -57,7 +57,7 @@ booster's own `pred_contribs`. Exact TreeSHAP either way — see §4 of the note
 | 8 | dependence plots, coloured by the feature that actually interacts most |
 | 9 | local: waterfall + force for the strongest fast-track, and for the pair straddling τ |
 | 10 | mean\|SHAP\| by score band inside the fast-track region |
-| 11 | `src/data/real/detection/<v>_attributions.parquet` + `_meta.json` |
+| 11 | `src/data/real/detection/shap/<v>_attributions_<split>.parquet` + `_meta.json` |
 
 §7 is the expensive one: interaction values cost O(rows × p²), so they run on a few hundred rows —
 enough to *rank* pairs, which is all that is needed to choose what to plot. (Rows are the only
@@ -82,9 +82,15 @@ versions whose attributions were produced under different SHAP backends.
 Its input can equally be produced headlessly, without opening a notebook per env:
 
 ```bash
-python src/scoring/attribute_all.py --dry-run     # resolve paths, write nothing
-python src/scoring/attribute_all.py --rows 5000 --background 500
+python src/scoring/attribute_all.py --split test --dry-run     # resolve paths, write nothing
+python src/scoring/attribute_all.py --split test --rows 5000 --background 500
+python src/scoring/attribute_all.py --split v2=test v3=oot     # per version (only v3 has "oot")
 ```
+
+`--split` is required and is not bookkeeping: φ files exist only per split, and concentration
+measured on `train` (the fitted function on data it saw) is a different statement from
+concentration on a holdout. The name lands in the output filename and in the sidecar meta, so it
+travels with the number.
 
 That driver additionally fixes **one shared claim set** across versions, which `00_SHAP.ipynb` does
 not (it samples its own rows — correct for a single-version analysis, confounded with case-mix for a
