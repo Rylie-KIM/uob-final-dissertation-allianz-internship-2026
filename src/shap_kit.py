@@ -323,7 +323,7 @@ class Attribution(object):
         return list(self.mean_abs.head(n).index)
 
     def frame(self, id_values=None, id_col: str = "claim_id") -> pd.DataFrame:
-        """phi as a tidy DataFrame — what gets written to detection/<v>_attributions.parquet."""
+        """phi as a tidy DataFrame — what gets written to detection/shap/<v>_attributions.parquet."""
         out = pd.DataFrame(self.phi, columns=self.features, index=self.X.index)
         if id_values is not None:
             out.insert(0, id_col, np.asarray(id_values))
@@ -548,6 +548,87 @@ def plot_beeswarm_abs(att: Attribution, top_n: int = 20, title=None, max_points:
         cbar = fig.colorbar(scatter, ax=ax, pad=0.01, aspect=30)
         cbar.set_label("mean |SHAP| of the feature", fontsize=9)
     return _finish(fig, title or "Magnitude beeswarm — importance spread per feature")
+
+
+# ======================================================================================
+# shap's OWN plotting layer — available only where shap is modern enough
+# ======================================================================================
+#
+# Everything above draws from the raw phi matrix with plain matplotlib, because this module has to
+# run under env-v1 as well (Python 3.5, shap 0.28 at best, xgboost 0.72) and that stack predates
+# shap's modern API entirely. The helpers below are the escape hatch for the envs where that
+# constraint does NOT bind — env-v2 (py3.10) and env-v3 (py3.11) can both install a current shap.
+#
+# They add pictures; they do not replace any. The cross-version figures must stay drawn by the SAME
+# code for all three versions, or a difference between two panels is partly a difference between
+# two renderers (different orderings, different clipping, different colour normalisation). So use
+# these for reading ONE version closely, and keep plot_bar/plot_beeswarm for anything that appears
+# beside another version.
+
+MODERN_SHAP_MIN = (0, 36)   # shap 0.36 (Sep 2020) introduced Explanation + shap.plots.*
+
+
+def shap_capability() -> dict:
+    """What shap can do in THIS env: importable at all, and modern enough for Explanation.
+
+    Returned rather than asserted, because the answer differs per env by design and the notebook
+    has to say which branch it took instead of silently taking one.
+    """
+    out = {"installed": False, "version": None, "explanation": False, "plots": False}
+    try:
+        import shap
+    except Exception:
+        return out
+    out["installed"] = True
+    out["version"] = getattr(shap, "__version__", "?")
+    out["explanation"] = hasattr(shap, "Explanation")
+    out["plots"] = hasattr(getattr(shap, "plots", None), "beeswarm")
+    return out
+
+
+def explanation(att: Attribution, feature_names=None):
+    """Wrap an ALREADY COMPUTED Attribution as a `shap.Explanation`. Nothing is recomputed.
+
+    This is the whole trick: phi, the base value and the feature matrix are what an Explanation
+    holds, and we have all three. So shap's plotting layer can draw our numbers without a second
+    TreeSHAP pass and without a second reference distribution — the plots below and the plots above
+    are guaranteed to be the same values.
+
+    Raises where shap is too old, naming the env, because that is a fact about the environment and
+    not something a caller can work around.
+    """
+    cap = shap_capability()
+    if not cap["explanation"]:
+        raise RuntimeError(
+            "this env's shap has no Explanation object (installed=%s, version=%s). That is env-v1: "
+            "Python 3.5 caps shap at the 2018 releases. Use plot_bar / plot_beeswarm instead — "
+            "they draw the same phi with plain matplotlib." % (cap["installed"], cap["version"])
+        )
+    import shap
+
+    return shap.Explanation(
+        values=np.asarray(att.phi),
+        base_values=np.asarray(att.base),
+        data=np.asarray(att.X.values),
+        feature_names=list(feature_names or att.features),
+    )
+
+
+def native_plot(kind: str, expl, *, show: bool = False, **kwargs):
+    """Call one of shap.plots.* and hand BACK the figure, so figstyle.save can take it.
+
+    shap draws onto the current figure and calls plt.show() itself unless told not to; every
+    plotting function here takes `show=False`, and we then grab plt.gcf(). Without that the figure
+    is closed before it can be saved, which is the usual reason a shap plot "does not save".
+    """
+    import matplotlib.pyplot as plt
+    import shap
+
+    fn = getattr(shap.plots, kind, None)
+    if fn is None:
+        raise AttributeError(f"shap.plots has no {kind!r} in shap {shap.__version__}")
+    fn(expl, show=show, **kwargs)
+    return plt.gcf()
 
 
 def plot_dependence(att: Attribution, feature: str, interaction=None, threshold_x=None,
