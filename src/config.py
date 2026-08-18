@@ -130,7 +130,7 @@ SPLITS: dict[str, tuple[str, ...]] = {
 # in-sample-vs-out-of-sample rather than in the fitted functions.
 OOT_SPLIT: dict[str, str] = {"v1": "val2", "v2": "test", "v3": "oot"}
 
-# Kinds that exist ONLY per split. The export notebooks (notebook/real/0{1,2,3}_export_v*)
+# Kinds that exist ONLY per split. The export notebooks (notebook/real/01_export_v{1,2,3})
 # write one file per SPLITS[version] and NEVER an unsplit base file, so asking for one of
 # these without a split is a bug, not a default — path() raises rather than resolving to a
 # name nothing produces. Everything outside this tuple (model, preprocessor, raw_dataset,
