@@ -109,13 +109,52 @@ KINDS = READ_KINDS + WRITE_KINDS
 # Per-version split names, in training order, under each version's OWN naming — v1 and v2
 # INVERT what "test" means (v2's "test" is the OOT-style tail), so the names are never
 # unified. Per-split artefacts live beside the base kind with a `_{split}` suffix before
-# the extension — resolve them via split_path(), never by hand.
+# the extension — resolve them by passing `split=` to path(), never by hand.
 SPLITS: dict[str, tuple[str, ...]] = {
     "v1": ("train", "test", "val1", "val2"),   # one merged pkl, sliced by known row counts
     "v2": ("train", "val", "test"),            # three separate Z: files, one per split
     "v3": ("train", "test", "oot"),            # three separate Z: files (user-confirmed
                                                #   2026-08-12); OOT is its own file
 }
+
+# WHICH split of each version is the out-of-time holdout — the temporally-later block the
+# README's training timeline calls OOT. The three versions spell it differently and one of
+# them spells it misleadingly, which is exactly why this mapping exists rather than a rule:
+#
+#   v1  val2   (user-confirmed 2026-08-18) — NOT "test". v1's "test" is an in-period split.
+#   v2  test   its "test" IS the tail, inverting v1's meaning of the same word.
+#   v3  oot    the only version that says so in the name.
+#
+# Use it wherever an analysis wants "the holdout" across versions — a cross-version SHAP
+# comparison must put every version on the same KIND of split, or the difference is partly
+# in-sample-vs-out-of-sample rather than in the fitted functions.
+OOT_SPLIT: dict[str, str] = {"v1": "val2", "v2": "test", "v3": "oot"}
+
+# Kinds that exist ONLY per split. The export notebooks (notebook/real/0{1,2,3}_export_v*)
+# write one file per SPLITS[version] and NEVER an unsplit base file, so asking for one of
+# these without a split is a bug, not a default — path() raises rather than resolving to a
+# name nothing produces. Everything outside this tuple (model, preprocessor, raw_dataset,
+# log, log_source) is a single artefact per version.
+#
+# The derived kinds are here for the same reason the produced ones are: attributions are
+# computed FROM one split's matrix, so "v2 SHAP concentration" is only a statement once the
+# split is named. Losing that would put an unrecorded case-mix choice under the thesis's
+# central number.
+SPLIT_KINDS = (
+    "processed_inputs",   # ┐ written per split by the export notebooks
+    "targets",            # │
+    "scores",             # ┘
+    "attributions",       # ┐ derived from one of the above, so they inherit its split
+    "corrected",          # │
+    "mitigated",          # │
+    "reeval_scores",      # ┘
+)
+
+# Analysis code may pass this instead of a split name to mean "every split, pooled, with a
+# `split` column recording where each row came from". It is deliberately a WORD, not the
+# default: pooling v1's 4-way split against v3's 3-way one mixes different train/holdout
+# proportions into a cross-version comparison, and that has to be a choice someone typed.
+ALL_SPLITS = "all"
 
 # Fallback location for a kind that is NOT declared for a version. Relative to ROOT.
 # ``{source}`` is "real" or "synthetic"; ``{v}`` is our version label.
@@ -351,45 +390,117 @@ def repo(version: str) -> pathlib.Path:
     return MODEL_REPOS / _require(version, "repo_dir")
 
 
-def path(kind: str, version: str, source: str = "real") -> pathlib.Path:
+def path(kind: str, version: str, source: str = "real", split: str | None = None) -> pathlib.Path:
     """Resolve an artefact by KIND, never by filename.
 
     A declared path in ``VERSIONS[version]["paths"][kind]`` always wins; absolute paths are used
     as-is (real artefacts may live off-repo, e.g. on a network drive), relative ones resolve
     against ``repo_dir``. If nothing is declared, the FALLBACK template under our own tree is
     used. So a kind moves from "ours" to "theirs" by filling in one line here — no code change.
+
+    ``split`` is REQUIRED for every kind in SPLIT_KINDS and rejected for the rest. It appends
+    ``_{split}`` before the extension, which is exactly what the export notebooks write. The
+    unsplit name (``features_v2.parquet``) is not a default — nothing produces it — so asking
+    for one without a split raises here instead of failing later as a missing file.
     """
     if kind not in KINDS:
         raise KeyError(f"unknown kind {kind!r}; expected one of {KINDS}")
 
+    if kind in SPLIT_KINDS and split is None:
+        raise ValueError(
+            f"{kind!r} exists only per split — the export notebooks write one file per split "
+            f"and never an unsplit base file. Pass split=<one of {SPLITS.get(version, ())}>. "
+            f"(To pool every split, analysis code uses loaders.load(..., split={ALL_SPLITS!r}); "
+            f"a single path cannot name more than one file.)"
+        )
+    if kind not in SPLIT_KINDS and split is not None:
+        raise ValueError(
+            f"{kind!r} is a single artefact per version, so split={split!r} is meaningless. "
+            f"Split kinds are {SPLIT_KINDS}."
+        )
+    if split is not None:
+        if version not in SPLITS:
+            raise KeyError(f"no splits declared for {version!r}; declare them in config.SPLITS")
+        if split not in SPLITS[version]:
+            raise KeyError(
+                f"unknown split {split!r} for {version}; expected one of {SPLITS[version]}. "
+                f"Split names are each version's OWN — v1 and v2 invert what 'test' means, and "
+                f"only v3 has 'oot', so they are never unified."
+            )
+
     declared = _version(version).get("paths", {}).get(kind)
     if _filled(declared):
         p = pathlib.Path(declared)
-        return p if p.is_absolute() else repo(version) / p
+        base = p if p.is_absolute() else repo(version) / p
+    else:
+        template = FALLBACK[kind]
+        if template is None:
+            raise ValueError(
+                f"config.VERSIONS['{version}']['paths']['{kind}'] is not declared and '{kind}' "
+                f"has no fallback location. Fill it in on the company laptop — unless it is "
+                f"declared None on purpose because the artefact does not exist (v1's production "
+                f"log was destroyed; v3 was never deployed), in which case nothing may ask for it."
+            )
+        base = ROOT / template.format(source=source, v=version)
 
-    template = FALLBACK[kind]
-    if template is None:
-        raise ValueError(
-            f"config.VERSIONS['{version}']['paths']['{kind}'] is not declared and '{kind}' has "
-            f"no fallback location. Fill it in on the company laptop — unless it is declared "
-            f"None on purpose because the artefact does not exist (v1's production log was "
-            f"destroyed; v3 was never deployed), in which case nothing may ask for it."
-        )
-    return ROOT / template.format(source=source, v=version)
+    if split is None:
+        return base
+    return base.with_name(f"{base.stem}_{split}{base.suffix}")
 
 
 def split_path(kind: str, version: str, split: str, source: str = "real") -> pathlib.Path:
-    """Per-split variant of path(): same location, `_{split}` before the extension.
+    """Per-split variant of path(), kept as the name the export notebooks call.
 
     E.g. split_path("processed_inputs", "v1", "train") ->
     .../inputs/features_v1_train.parquet. Valid splits are config.SPLITS[version].
     """
-    if version not in SPLITS:
-        raise KeyError(f"no splits declared for {version!r}; declare them in config.SPLITS")
-    if split not in SPLITS[version]:
-        raise KeyError(f"unknown split {split!r} for {version}; expected one of {SPLITS[version]}")
-    base = path(kind, version, source)
-    return base.with_name(f"{base.stem}_{split}{base.suffix}")
+    return path(kind, version, source, split=split)
+
+
+def resolve_splits(spec: list[str] | None, versions: list[str]) -> dict[str, str]:
+    """Turn a CLI --split argument into {version: split}.
+
+    Two forms, because split names are per-version and only sometimes shared:
+
+        --split test              one name for every version named in --versions
+        --split v2=test v3=oot    a name per version (the only way to reach v3's 'oot')
+
+    Every name is validated against SPLITS[version] here, so a typo fails before any
+    subprocess is launched rather than inside a version env on the company laptop.
+    """
+    if not spec:
+        raise SystemExit(
+            "\n--split is required: processed_inputs / targets / scores exist only per split.\n"
+            "  --split test               (same name for every version)\n"
+            "  --split v2=test v3=oot     (per version)\n"
+            + "\n".join(f"  {v}: {SPLITS.get(v, ())}" for v in versions) + "\n"
+        )
+
+    if len(spec) == 1 and "=" not in spec[0]:
+        chosen = {v: spec[0] for v in versions}
+    else:
+        chosen = {}
+        for item in spec:
+            if "=" not in item:
+                raise SystemExit(
+                    f"\n--split: mixed forms. Use ONE bare name for all versions, or "
+                    f"'version=split' for every one. Got {item!r}.\n"
+                )
+            v, _, s = item.partition("=")
+            chosen[v] = s
+        missing = [v for v in versions if v not in chosen]
+        if missing:
+            raise SystemExit(f"\n--split: no split given for {', '.join(missing)}\n")
+
+    for v, s in chosen.items():
+        if v not in SPLITS:
+            raise SystemExit(f"\n--split: no splits declared for {v!r}\n")
+        if s not in SPLITS[v]:
+            raise SystemExit(
+                f"\n--split: {s!r} is not a split of {v} — expected one of {SPLITS[v]}.\n"
+                f"Split names are each version's own; v1 and v2 invert 'test'.\n"
+            )
+    return chosen
 
 
 def python_bin(version: str) -> pathlib.Path:
