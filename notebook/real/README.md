@@ -3,7 +3,7 @@
 Three notebooks. The two `00_` notebooks answer different questions about SHAP; `01_` is the
 Layer-1 primary detector.
 
-## 0 · `01_error_inheritance.ipynb` — does the next model repeat its predecessor's verified mistakes?
+## 0 · `02_error_inheritance.ipynb` — does the next model repeat its predecessor's verified mistakes?
 
 The primary detection test (paper §3.3.1). Uses v1's mobility-segmented cutoffs: in the band
 `(0.75, 0.85]` mobile vehicles were garaged and verified while immobile ones were scrapped, so
@@ -48,7 +48,7 @@ booster's own `pred_contribs`. Exact TreeSHAP either way — see §4 of the note
 | § | output |
 |---|---|
 | 1 | training configuration + that version's decision rule, printed before any figure |
-| 2 | feature-space profile — count, types, missingness, cardinality, one-hot families (L0, never collapsed) |
+| 2 | feature-space profile — count, types, missingness, cardinality, one-hot families (raw names, never collapsed) |
 | 3 | score distribution and the fast-track cutoff |
 | 4 | SHAP values + the additivity check (φ must sum to the model's own margin) |
 | 5 | input distributions of the top drivers, below vs above τ |
@@ -75,7 +75,7 @@ the stack that pairs with xgboost 0.72.1.
 ## 2 · `00_shap_attribution.ipynb` — the cross-version comparison
 
 Only after all three have been attributed. Reads the parquets, never a model, and runs in the
-analysis `.venv`. It reports the L0 feature overlap, the concentration measures
+analysis `.venv`. It reports the raw-column-name feature overlap, the concentration measures
 (Hill / Shannon / Simpson / Gini / top-k, `src/estimator/concentration.py`), and refuses to compare
 versions whose attributions were produced under different SHAP backends.
 
@@ -92,9 +92,17 @@ measured on `train` (the fitted function on data it saw) is a different statemen
 concentration on a holdout. The name lands in the output filename and in the sidecar meta, so it
 travels with the number.
 
-That driver additionally fixes **one shared claim set** across versions, which `00_SHAP.ipynb` does
-not (it samples its own rows — correct for a single-version analysis, confounded with case-mix for a
-comparison). Before reporting any cross-version difference, use the driver's ids or state the caveat.
+**Case-mix is a standing caveat, not a fixable one.** Explaining every version on the same claims
+would remove it, but the windows make that impossible in general — v2 runs 2018-01→2020-09 and v3
+runs 2023-06→2026-05, so no claim is common to all three. Both the driver and `00_SHAP.ipynb`
+therefore sample per version, and every cross-version difference must be reported with that caveat.
+`--shared-claims` opts into the intersection for a pair that genuinely overlaps in time (v1/v2) and
+fails loudly when it is empty.
+
+A shared claim set would also not be sufficient on its own: the versions consume different feature
+matrices under different column names, so any cross-version reading still goes through the
+hand-confirmed mapping (`features/feature_overlap.json`), restricted to the mapped features and
+renormalised within them.
 
 ## File map
 

@@ -29,10 +29,10 @@ uv pip install ipykernel
 ### Step 3: Register the kernel with Jupyter
 
 ```bash
-uv run python3 -m ipykernel install --user --name sfp-detection --display-name "Python 3.11 (sfp-detection)"
+uv run python3 -m ipykernel install --user --name ml-sfp-detection --display-name "Python 3.11 (ml-sfp-detection)"
 ```
 
-**Note:** Change `sfp-detection` to any kernel name you prefer. The `--display-name` is what appears in the Jupyter UI.
+**Note:** Change `ml-sfp-detection` to any kernel name you prefer. The `--display-name` is what appears in the Jupyter UI.
 
 ### Step 4: Verify the kernel is registered
 
@@ -40,7 +40,7 @@ uv run python3 -m ipykernel install --user --name sfp-detection --display-name "
 jupyter kernelspec list
 ```
 
-You should see `sfp-detection` in the output list.
+You should see `ml-sfp-detection` in the output list.
 
 ---
 
@@ -66,10 +66,10 @@ uv pip install ipykernel
 ### Step 3: Register the kernel with Jupyter
 
 ```powershell
-uv run python -m ipykernel install --user --name sfp-detection --display-name "Python 3.11 (sfp-detection)"
+uv run python -m ipykernel install --user --name ml-sfp-detection --display-name "Python 3.11 (ml-sfp-detection)"
 ```
 
-**Note:** On Windows, use `python` instead of `python3`. Change `sfp-detection` to any kernel name you prefer.
+**Note:** On Windows, use `python` instead of `python3`. Change `ml-sfp-detection` to any kernel name you prefer.
 
 ### Step 4: Verify the kernel is registered
 
@@ -77,7 +77,7 @@ uv run python -m ipykernel install --user --name sfp-detection --display-name "P
 jupyter kernelspec list
 ```
 
-You should see `sfp-detection` in the output list.
+You should see `ml-sfp-detection` in the output list.
 
 ## Using the Kernel in Jupyter
 
@@ -92,7 +92,7 @@ You should see `sfp-detection` in the output list.
 
 2. Open or create a `.ipynb` file.
 
-3. Click the **Kernel** button (top right) → **Select another kernel** → choose `Python 3.11 (sfp-detection)`.
+3. Click the **Kernel** button (top right) → **Select another kernel** → choose `Python 3.11 (ml-sfp-detection)`.
 
 4. Verify the kernel is active:
    - Cell output shows `Python 3.11.x [...]` at startup
@@ -102,7 +102,7 @@ You should see `sfp-detection` in the output list.
 
 1. Open a `.ipynb` file in VS Code.
 2. Click the **kernel picker** (top right).
-3. Select **Python 3.11 (sfp-detection)**.
+3. Select **Python 3.11 (ml-sfp-detection)**.
 4. Verify by running a cell with `import sys; print(sys.executable)`.
 
 ## Troubleshooting
@@ -123,12 +123,12 @@ If missing, re-run Step 3:
 
 **macOS/Linux:**
 ```bash
-uv run python3 -m ipykernel install --user --name sfp-detection --display-name "Python 3.11 (sfp-detection)"
+uv run python3 -m ipykernel install --user --name ml-sfp-detection --display-name "Python 3.11 (ml-sfp-detection)"
 ```
 
 **Windows:**
 ```powershell
-uv run python -m ipykernel install --user --name sfp-detection --display-name "Python 3.11 (sfp-detection)"
+uv run python -m ipykernel install --user --name ml-sfp-detection --display-name "Python 3.11 (ml-sfp-detection)"
 ```
 
 ### "ModuleNotFoundError" when running cells
@@ -143,13 +143,13 @@ If still broken, try reinstalling:
 **macOS/Linux:**
 ```bash
 uv pip install --force-reinstall ipykernel
-uv run python3 -m ipykernel install --user --name sfp-detection --force --display-name "Python 3.11 (sfp-detection)"
+uv run python3 -m ipykernel install --user --name ml-sfp-detection --force --display-name "Python 3.11 (ml-sfp-detection)"
 ```
 
 **Windows:**
 ```powershell
 uv pip install --force-reinstall ipykernel
-uv run python -m ipykernel install --user --name sfp-detection --force --display-name "Python 3.11 (sfp-detection)"
+uv run python -m ipykernel install --user --name ml-sfp-detection --force --display-name "Python 3.11 (ml-sfp-detection)"
 ```
 
 ### Using uv run within notebooks (alternative)
@@ -183,12 +183,12 @@ uv sync
 
 # 3. Install and register kernel
 uv pip install ipykernel
-uv run python3 -m ipykernel install --user --name sfp-detection --display-name "Python 3.11 (sfp-detection)"
+uv run python3 -m ipykernel install --user --name ml-sfp-detection --display-name "Python 3.11 (ml-sfp-detection)"
 
 # 4. Start Jupyter
 jupyter lab
 
-# 5. Open a notebook and select "Python 3.11 (sfp-detection)" kernel
+# 5. Open a notebook and select "Python 3.11 (ml-sfp-detection)" kernel
 ```
 
 ### Windows (PowerShell)
@@ -204,12 +204,12 @@ uv sync
 
 # 3. Install and register kernel
 uv pip install ipykernel
-uv run python -m ipykernel install --user --name sfp-detection --display-name "Python 3.11 (sfp-detection)"
+uv run python -m ipykernel install --user --name ml-sfp-detection --display-name "Python 3.11 (ml-sfp-detection)"
 
 # 4. Start Jupyter
 jupyter lab
 
-# 5. Open a notebook and select "Python 3.11 (sfp-detection)" kernel
+# 5. Open a notebook and select "Python 3.11 (ml-sfp-detection)" kernel
 ```
 
 ## Removing the kernel
@@ -218,16 +218,16 @@ If you need to unregister the kernel:
 
 **macOS/Linux:**
 ```bash
-jupyter kernelspec remove sfp-detection
+jupyter kernelspec remove ml-sfp-detection
 ```
 
 **Windows:**
 ```powershell
-jupyter kernelspec remove sfp-detection
+jupyter kernelspec remove ml-sfp-detection
 ```
 
 ## Additional Notes
 
 - **Environment activation:** Unlike conda, `uv` does not require activating the environment explicitly. The kernel automatically uses the `.venv` directory.
 - **Reproducibility:** Always commit `pyproject.toml` and `uv.lock` to version control. Running `uv sync` on a new machine ensures identical dependencies.
-- **Fallback (conda):** If uv setup fails, the conda environment `sfp-detection` (see main README) can be used, but `uv` is the standard for this project.
+- **Fallback (conda):** If uv setup fails, the conda environment `ml-sfp-detection` (see main README) can be used, but `uv` is the standard for this project.
