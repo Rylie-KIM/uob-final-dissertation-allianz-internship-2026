@@ -58,10 +58,15 @@ VERSION_LABELS = ("v1", "v2", "v3")
 #                     v1                          v2                          v3
 #   model             outputs/fasstacker_xgb.pkl  outputs/model.pkl           outputs/p146_model.pkl
 #   preproc           outputs/fttl_pipeline.pkl   outputs/pipeline.pkl        outputs/p146_pipeline.pkl
-#   raw_dataset       Z: inputs.pkl               Z: Data/clean_dataset.pkl   DATABASE extract (no file)
-#   processed_inputs  Z: inputs_transformed.pkl   Z: Data/*_transf_{ts}.pkl   NOT SAVED — regenerate
+#   raw_dataset       Z: inputs.pkl               Z: Data/clean_dataset.pkl   Z: (exists — 2026-08-10)
+#   processed_inputs  Z: inputs_transformed.pkl   Z: Data/*_transf_{ts}.pkl   Z: (exists — 2026-08-10)
 #   targets           a COLUMN in the data (veh_total_loss / veh_total_loss / Fttl), never its own file
-#   prod log          DESTROYED                   exists (live model)         NEVER EXISTED (not deployed)
+#   prod log          DESTROYED                   exists (live model)         NEVER EXISTED (confirmed)
+#
+# NB v3: the training SCRIPT persists nothing (as transcribed 2026-08-08), but its raw extract and
+# transformed data DO sit on the Z: drive (user-confirmed 2026-08-10) — so v3 exports like v1/v2,
+# and the DB-regeneration chain (sql -> enrichments -> pipeline) is only a FALLBACK, with its
+# as-of-now enrichment caveat applying to that route alone.
 #
 # So: model + preprocessor live IN the repo (two separate pickles, all three versions);
 # data lives on the Z: network drive as pandas pickles (v1/v2) or in the database (v3).
@@ -101,6 +106,17 @@ WRITE_KINDS = (
 
 KINDS = READ_KINDS + WRITE_KINDS
 
+# Per-version split names, in training order, under each version's OWN naming — v1 and v2
+# INVERT what "test" means (v2's "test" is the OOT-style tail), so the names are never
+# unified. Per-split artefacts live beside the base kind with a `_{split}` suffix before
+# the extension — resolve them via split_path(), never by hand.
+SPLITS: dict[str, tuple[str, ...]] = {
+    "v1": ("train", "test", "val1", "val2"),   # one merged pkl, sliced by known row counts
+    "v2": ("train", "val", "test"),            # three separate Z: files, one per split
+    "v3": ("train", "test", "oot"),            # three separate Z: files (user-confirmed
+                                               #   2026-08-12); OOT is its own file
+}
+
 # Fallback location for a kind that is NOT declared for a version. Relative to ROOT.
 # ``{source}`` is "real" or "synthetic"; ``{v}`` is our version label.
 #
@@ -119,7 +135,7 @@ FALLBACK: dict[str, str | None] = {
     "raw_dataset":      "src/data/{source}/inputs/raw_{v}.parquet",   # the export notebooks'
                                                                       #   frozen snapshot
     "scores":        "src/data/{source}/detection/{v}_scores.parquet",
-    "attributions":  "src/data/{source}/detection/{v}_attributions.parquet",
+    "attributions":  "src/data/{source}/detection/shap/{v}_attributions.parquet",
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
     "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
@@ -153,8 +169,9 @@ VERSIONS: dict[str, dict] = {
         # -- identity -------------------------------------------------------------------
         # Folder name inside model_repos/real/. NOT "fttl-v1" — use the real clone's name.
         "repo_dir": PLACEHOLDER,
-        # Import name of the installed package (also NOT "fttl_v1").
-        "package": PLACEHOLDER,
+        # ("package" key removed 2026-08-09: nothing read it, and the concept does not match
+        # the real envs — v1/v2 are registered via a hand-written fttl.pth (bare module dirs,
+        # no installable package name), v3 via an editable install. See SETUP.md.)
         # The xgboost release this version's model was serialised with. Read off env-v1 itself on
         # 2026-08-06: `xgboost.__version__` prints "0.72" (Python 3.5.6) — it comes from the repo's
         # vendored cp35 wheel, not from PyPI, so it carries no patch component. Transcribe it
@@ -163,11 +180,22 @@ VERSIONS: dict[str, dict] = {
         # Interpreter for THIS version's env. Loading the pickle re-imports the repo's classes
         # and its exact library stack, so it must be that version's own env — see README
         # "Model artefacts and reproduction". Absolute, or relative to repo root.
-        "python": "src/envs/v1/.venv/bin/python",
+        # The ENV DIRECTORY, not an interpreter path — the interpreter's location differs per
+        # OS/layout (bin/python on POSIX, Scripts\python.exe in a Windows venv, python.exe at
+        # the root of a conda env). python_bin() resolves it at call time, so this declaration
+        # is true on every machine.
+        "python": "src/envs/v1/.venv",
 
         # ("builder"/"adapter" hooks removed 2026-08-09 — never used. The fitted preprocessing
         # is always LOADED from paths.preprocessor, and all three versions expose predict_proba,
         # confirmed 2026-07-31, so no per-version handling override was ever needed.)
+
+        # ("train_scores_source" key removed 2026-08-13: no code ever resolved it, and like
+        # every version's Z: sources the path lives in the export notebook's SOURCES cell —
+        # here notebook/real/01_export_v1.ipynb (PREDICTIONS). What it pointed at: v1's
+        # surviving TRAIN-TIME scored file, [claimnumber, predictions], all four splits,
+        # 2016-01-01 -> 2018-02-09 — not the destroyed production log. The export lands in
+        # the "scores" parquet, in-sample for the train split.)
 
         # -- artefact paths (read off the training code 2026-08-08) ---------------------
         # Absolute, or relative to repo_dir. Blank/PLACEHOLDER -> FALLBACK template.
@@ -184,8 +212,8 @@ VERSIONS: dict[str, dict] = {
             # fails loudly with FileNotFoundError, so this is safe to try as-is.
             "model": "outputs/fasstacker_xgb.pkl",
             "preprocessor": "outputs/fttl_pipeline.pkl",
-            # Production log destroyed. The surviving TRAIN-TIME scored file
-            # (Z:/.../predictions.pkl) is exported to the "scores" parquet by 01_export_v1.
+            # Production log destroyed — None for good. The surviving train-time scored file
+            # is a different thing — its Z: path lives in 01_export_v1's SOURCES cell.
             "log_source": None,
             # Z:/.../inputs_transformed.pkl (one appended file, train+test+val1+val2) —
             # read and exported by 01_export_v1; analysis reads the fallback.
@@ -200,12 +228,15 @@ VERSIONS: dict[str, dict] = {
             "date": "lossdate",          # accident date; v1 splits on it (confirmed)
             "score": "predictions",      # in the surviving train-time scored file. NOT a
                                          #   production log score — that log is gone.
-            "decision": None,            # no surviving artefact records production decisions;
-                                         #   reconstruct via DECISION_RULES["v1"] if needed
+            "decision": None,            # no surviving artefact records production decisions
+                                         #   (the destroyed log's field was named
+                                         #   `fasttracker_decision` per the serving code,
+                                         #   2026-08-10); reconstruct via DECISION_RULES["v1"]
             "observed": "veh_total_loss",  # the training target; veh_fast_track=1 forces it to 1
                                            #   (README "v1 target construction")
-            "mobility": PLACEHOLDER,     # needed: v1's rule is segmented on it. In the raw
-                                         #   extract — real column name still to be read off.
+            "mobility": "vehicle_mobility_status",   # confirmed 2026-08-10, read off v1's
+                                                     #   serving code (the segmented rule keys
+                                                     #   on it — see DECISION_RULES["v1"])
         },
 
         # Which era's label this version learned from. A CONCEPT, not a column name — the real
@@ -214,9 +245,8 @@ VERSIONS: dict[str, dict] = {
     },
     "v2": {
         "repo_dir": PLACEHOLDER,
-        "package": PLACEHOLDER,
         "xgboost": "1.4.2",       # user-confirmed 2026-08-01
-        "python": "src/envs/v2/.venv/bin/python",
+        "python": "src/envs/v2/.venv",   # env dir; interpreter resolved by python_bin()
         "paths": {
             "model": "outputs/model.pkl",           # read off the training code 2026-08-08
             "preprocessor": "outputs/pipeline.pkl",  # tubular-based; joblib.dump'd
@@ -242,9 +272,8 @@ VERSIONS: dict[str, dict] = {
     },
     "v3": {
         "repo_dir": PLACEHOLDER,
-        "package": PLACEHOLDER,
         "xgboost": "3.2.0",       # user-confirmed 2026-08-01
-        "python": "src/envs/v3/.venv/bin/python",
+        "python": "src/envs/v3/.venv",   # env dir; interpreter resolved by python_bin()
         # v3's raw data is NOT a file: the training script pulls it straight from the database
         # (polars). To make it a raw_input artefact, export once on the company laptop and
         # declare the export path below.
@@ -257,23 +286,30 @@ VERSIONS: dict[str, dict] = {
             "preprocessor": "outputs/p146_pipeline.pkl",  # the STATEFUL pipeline. A stateless
                                                           #   stage runs before it and is code,
                                                           #   not a pickle — rerun it from the repo
-            # Never deployed -> no production log exists, and never will. None = "this version
-            # has no such artefact" (same convention as columns), not "still to fill in".
+            # Never deployed -> no production log exists, and never will (user-reconfirmed
+            # 2026-08-10). None = "this version has no such artefact".
             "log_source": None,
-            # The split step saves nothing: no transformed matrices survive training.
-            # 01_export_v3 REGENERATES the matrix (sql -> enrichments -> stateless ->
-            # preprocessor.transform) and writes it to the fallback path.
+            # EXISTS on Z: (confirmed 2026-08-10 — the training script saves nothing, but the
+            # data is there anyway). Path lives in 01_export_v3's SOURCES cell; analysis reads
+            # the exported fallback parquet. Being the data training ACTUALLY saw, it carries
+            # no as-of-now enrichment caveat — unlike the DB-regeneration fallback.
             "processed_inputs": None,
-            # No file exists — 01_export_v3 freezes its DB extract to the fallback snapshot.
+            # Same: exists on Z:, read by 01_export_v3, analysis reads the fallback snapshot.
             "raw_dataset": None,
         },
         "columns": {
-            "claim_id": PLACEHOLDER,    # `project_params.KEY` in the repo — read the actual string
+            "claim_id": "ID_CLAIM",    # `project_params.KEY` in the repo — read the actual string
             # Same underlying field as v2's ReportedDate, renamed (confirmed 2026-07-29).
             "date": "ReportedDate_CLAIM",
-            "score": None,              # never deployed — no production score exists; we generate
-                                        #   model_v3_score ourselves via scoring/predict.py
-            "decision": None,           # same reason
+            # TRAIN-TIME score, saved as a column inside the Z: transformed data (confirmed
+            # 2026-08-10) — same status as v1's "predictions": the fitted model's own output,
+            # in-sample for the train split. NOT a production score (never deployed).
+            "score": "fttl_predicted_prob",
+            # The sibling column `fttl_predicted_label` (score > tuned threshold) also exists,
+            # but it is deliberately NOT declared as our canonical `decision`: canonical
+            # decision means the TREATMENT (a car actually fast-tracked to scrap), and v3
+            # never actioned anything. A predicted label is not a treatment.
+            "decision": None,
             "observed": "Fttl",         # add_target(): vehicle status in {fttl, total_loss,
                                         #   unrecovered} -> Fttl=1. Same label as veh_total_loss
                                         #   renamed (confirmed 2026-08-04).
@@ -342,28 +378,45 @@ def path(kind: str, version: str, source: str = "real") -> pathlib.Path:
     return ROOT / template.format(source=source, v=version)
 
 
+def split_path(kind: str, version: str, split: str, source: str = "real") -> pathlib.Path:
+    """Per-split variant of path(): same location, `_{split}` before the extension.
+
+    E.g. split_path("processed_inputs", "v1", "train") ->
+    .../inputs/features_v1_train.parquet. Valid splits are config.SPLITS[version].
+    """
+    if version not in SPLITS:
+        raise KeyError(f"no splits declared for {version!r}; declare them in config.SPLITS")
+    if split not in SPLITS[version]:
+        raise KeyError(f"unknown split {split!r} for {version}; expected one of {SPLITS[version]}")
+    base = path(kind, version, source)
+    return base.with_name(f"{base.stem}_{split}{base.suffix}")
+
+
 def python_bin(version: str) -> pathlib.Path:
     """Interpreter of that version's isolated env — the only one its pickle unpickles in.
 
-    The declared path uses the POSIX venv layout (``.venv/bin/python``). If it does not exist,
-    two Windows layouts are tried before giving up — the company laptop is Windows, and requiring
-    the declaration to be edited per-OS would put an OS detail into a version declaration:
+    The declaration is the ENV DIRECTORY (``src/envs/v2/.venv``), deliberately OS-neutral —
+    there is no interpreter path that exists on every machine. The three real layouts are
+    tried in order:
 
-    * ``.venv\\Scripts\\python.exe`` — a normal venv on Windows
-    * ``.venv\\python.exe``          — a conda env created with ``-p`` (env-v1 is built this way:
-      Python 3.5.2 comes from conda because uv does not work below 3.6 — see SETUP.md)
+    * ``<env>/bin/python``          — venv/conda on POSIX (local laptop)
+    * ``<env>\\Scripts\\python.exe``  — venv on Windows (env-v2, env-v3 on the company laptop)
+    * ``<env>\\python.exe``          — conda env created with ``-p`` on Windows (env-v1:
+      Python 3.5 comes from conda because uv does not work below 3.6 — see SETUP.md)
+
+    A declared FILE path (an explicit interpreter) is also accepted and returned as-is.
     """
     p = pathlib.Path(_require(version, "python"))
     p = p if p.is_absolute() else ROOT / p
-    if not p.exists():
-        parts = list(p.parts)
-        if "bin" in parts:
-            i = len(parts) - 1 - parts[::-1].index("bin")
-            env_root = pathlib.Path(*parts[:i])
-            for alt in (env_root / "Scripts" / "python.exe", env_root / "python.exe"):
-                if alt.exists():
-                    return alt
-    return p
+    if p.is_file():
+        return p
+    for alt in (p / "bin" / "python", p / "Scripts" / "python.exe", p / "python.exe"):
+        if alt.exists():
+            return alt
+    raise FileNotFoundError(
+        f"[{version}] no interpreter found under {p} (tried bin/python, Scripts/python.exe, "
+        f"python.exe). Is the env built? See SETUP.md."
+    )
 
 
 def column(version: str, canonical: str) -> str:
@@ -401,7 +454,9 @@ def rename_map(version: str) -> dict[str, str]:
 # in score space (never a percentile), and it exists to hold precision >= 0.985.
 
 DECISION_RULES: dict[str, dict] = {
-    # v1 alone is SEGMENTED — two cutoffs keyed on vehicle mobility (confirmed 2026-07-29).
+    # v1 alone is SEGMENTED — two cutoffs keyed on vehicle mobility (confirmed 2026-07-29;
+    # RE-CONFIRMED verbatim from the serving code 2026-08-10: column `vehicle_mobility_status`,
+    # mobile set exactly as below, STRICT `>` comparisons — matching threshold.py).
     # The immobile (undrivable, more damaged) car is scrapped on a lower bar.
     "v1": {
         "shape": "segmented",
@@ -568,7 +623,7 @@ def missing() -> dict[str, list[str]]:
     gaps: dict[str, list[str]] = {}
     for v, fields in VERSIONS.items():
         out: list[str] = []
-        for key in ("repo_dir", "package", "python"):
+        for key in ("repo_dir", "python"):
             if not _filled(fields.get(key)):
                 out.append(key)
         for kind, value in fields.get("paths", {}).items():
