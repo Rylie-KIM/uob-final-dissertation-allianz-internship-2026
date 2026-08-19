@@ -94,6 +94,11 @@ WRITE_KINDS = (
     "log",            # log_source with its columns RENAMED to ours — 01_export_v2.ipynb writes
                       #   it (only v2 has a production log), and it is the only log anything
                       #   downstream reads. (scoring/ingest.py did this; absorbed 2026-08-09.)
+    "log_features",   # the PRODUCTION LOG's transformed feature matrix: claim_id + the model's
+                      #   own feature columns, one row per logged claim. Only v2 has one. Not a
+                      #   SPLIT kind — the log is a single row set, and it is NOT one of the
+                      #   training splits: those rows come from the Z: transformed frames
+                      #   (`processed_inputs`), these from what production actually scored.
     "targets",        # claim_id + date + observed, DERIVED at ingest. No version ships this as
                       #   its own artefact — the target is a column inside raw/features
                       #   (v1/v2 `veh_total_loss`, v3 `Fttl`), so we extract it ourselves.
@@ -168,6 +173,7 @@ FALLBACK: dict[str, str | None] = {
     "preprocessor":     "src/models/{source}/baseline/{v}_prep.pkl",
     "log_source":       None,   # no sensible default — must be declared
     "log":              "src/data/{source}/logs/{v}.parquet",
+    "log_features":     "src/data/{source}/logs/features_{v}_log.parquet",
     "processed_inputs": "src/data/{source}/inputs/features_{v}.parquet",   # filename kept: docs
                                                                            #   reference it
     "targets":          "src/data/{source}/inputs/targets_{v}.parquet",
@@ -283,7 +289,7 @@ VERSIONS: dict[str, dict] = {
         "trained_on": "pre_ml",
     },
     "v2": {
-        "repo_dir": PLACEHOLDER,
+        "repo_dir": "CliamNumber",
         "xgboost": "1.4.2",       # user-confirmed 2026-08-01
         "python": "src/envs/v2/.venv",   # env dir; interpreter resolved by python_bin()
         "paths": {
@@ -299,12 +305,16 @@ VERSIONS: dict[str, dict] = {
             "raw_dataset": None,
         },
         "columns": {
-            "claim_id": PLACEHOLDER,     # not read off yet — check clean_dataset.pkl
+            "claim_id": "Claimnumber_CLAIM",     # not read off yet — check clean_dataset.pkl
             "date": "ReportedDate",      # confirmed 2026-07-29
             # The live log's model output. Spelling is the repo's, typo included — read off the
             # log itself 2026-08-19. Do not "fix" it here; this is the real column name.
             "score": "FastTrackerProbablity",
-            "decision": "FastTrackerDecision",     # whatever the live log calls the fast-track flag
+            # ⚠️ UNVERIFIED (typed 2026-08-19): this name has NOT been checked against the
+            # live log's columns yet. The treatment column is the one thing the log alone
+            # can supply — everything else can be rebuilt — so confirm it against
+            # `LOG.columns` in 01_export_v2_logs.ipynb and drop this warning once seen.
+            "decision": "FastTrackerDecision",
             "observed": "veh_total_loss",  # par.TARGET in TRAINING data (confirmed). The LIVE
                                            #   log carries NO outcome column: 01_export_v2_logs
                                            #   joins it from the v3 extract's `Fttl` on claim
