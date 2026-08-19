@@ -199,6 +199,33 @@ Five things about that file, each learned the hard way:
   corrupt the first line; `.pth` ignores lines starting with `#`, so the BOM lands somewhere
   harmless.
 
+### Verifying what a built env actually contains *(added 2026-08-10)*
+
+`src/envs/check_installed.py` reads a `pyproject.toml`'s declared dependencies and reports, for one
+or more venvs at once, which are present, at what version, and — via PEP 610 `direct_url.json` —
+which came from a git URL or a local path rather than an index. It only inspects; it never installs.
+
+```bash
+python src/envs/check_installed.py \
+    --pyproject model_repos/real/fttl-v3/pyproject.toml \
+    --venv model_repos/real/fttl-v3/.venv \
+    --venv src/envs/v3/.venv
+```
+
+Two venvs are worth passing together because a version repo cloned from Allianz brings **its own**
+`.venv`, built by whoever ran it in production, while `src/envs/v3/.venv` is the one built here from
+the pins. Where those two disagree, the production one is the reference — the pickle was written
+under it. The `--all` flag additionally lists packages installed but not declared, which is how an
+undeclared transitive import (the `pyodbc`-at-load-time class of problem, § v1) surfaces before it
+breaks an unpickle.
+
+The driving interpreter needs 3.11+ for `tomllib`; the inspected venvs can be any 3.8+, so the
+analysis `.venv` can audit env-v1 (3.5.6) without env-v1 running the script itself.
+
+Two limits, both deliberate: it parses dependency **names** only, not version specifiers (it reports
+what is installed rather than judging a constraint), and it resolves `[tool.uv.sources]` only —
+Poetry-style source tables are not read, since the version repos are uv/setuptools projects.
+
 ---
 
 ## Scoring with the right env (offline, one process per version)
@@ -207,25 +234,30 @@ Each model version is scored **offline, inside its own env**, and the prediction
 
 ```bash
 # Standard envs — call each env's interpreter directly
-src/envs/v1/.venv/bin/python src/scoring/predict.py --model src/models/synthetic/baseline/v1.pkl \
-    --features src/data/synthetic/inputs/features_v1.parquet --version v1 \
-    --out src/data/synthetic/detection/v1_scores.parquet
+src/envs/v1/.venv/bin/python src/scoring/predict.py --model src/models/real/baseline/v1.pkl \
+    --features src/data/real/inputs/features_v1_test.parquet --version v1 \
+    --out src/data/real/detection/v1_scores_test.parquet
 
 # Stricter (project) envs — uv run --project selects that version's env
-uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/synthetic/baseline/v2.pkl \
-    --features src/data/synthetic/inputs/features_v2.parquet --version v2 \
-    --out src/data/synthetic/detection/v2_scores.parquet
+uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/real/baseline/v2.pkl \
+    --features src/data/real/inputs/features_v2_test.parquet --version v2 \
+    --out src/data/real/detection/v2_scores_test.parquet
 ```
+
+Note the `_test` suffix: feature matrices, targets and scores exist **only per split** — the export
+notebooks write one file each and no unsplit base file. The drivers below take `--split` (one name
+for every version, or `v2=test v3=oot`, since split names are each version's own) and resolve those
+paths themselves. See `STRUCTURE.md` § "Some kinds exist ONLY per split".
 
 `src/scoring/score_all.py` wraps all three versions (it supersedes `score_all.sh`). The script is **version-agnostic** — the active env plus the CLI args decide which version is scored. It is Python rather than bash for two reasons: it reads `config.py` natively to resolve every path by *kind* (bash cannot import it — see `STRUCTURE.md` § "Paths are resolved by KIND"), and the company laptop is Windows, where `.sh` does not run. It selects each env by calling `config.python_bin(version)`, so the interpreter paths above are declared in one place rather than repeated per call site. See `DESIGN.md` for the full design and the superseded runtime-subprocess alternative.
 
 `src/training/train_all.py` is its counterpart for baseline training (it replaced `train_all.sh`, deleted 2026-07-31). It **skips any version whose `config.VERSIONS[v]["paths"]["model"]` is declared** — that version already ships its own production pickle, and retraining would substitute an approximation for a measured artefact. v1 is permanently in that category: its training data was destroyed, so its baseline cannot be rebuilt at all.
 
-**Training, re-training and preprocessing also run in the per-version env.** `src/training/train.py` (baseline pkl), `src/training/retrain.py` (mitigated pkl, re-evaluation) and `src/preprocessing/v{1,2,3}.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py` — because all load or build that version's model and so need its repo importable. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. The **log-ingestion** step (`scoring/ingest.py` → `logs/<v>.parquet`) and the log→inputs split (`build_inputs.py`) touch no model and run in the analysis `.venv`. The standalone real-data onboarding util **`scoring/inspect_pickle.py`** (loads a prod pickle to report its schema + date range) is env-dependent by *content*, not by design: a plain-data DataFrame pickle loads in the analysis `.venv`, but if the pickle proves to hold a fitted model / custom classes it must be opened in that version's env (same rule as `predict.py`). It self-diagnoses the two traps — a `numpy._core` error ⇒ the writer used numpy ≥ 2.0 (match the major version), a missing repo module ⇒ a model pickle needing its version env. Note *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
+**Training, re-training and preprocessing also run in the per-version env.** `src/training/train.py` (baseline pkl), `src/training/retrain.py` (mitigated pkl, re-evaluation) and `src/preprocessing/v{1,2,3}.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py` — because all load or build that version's model and so need its repo importable. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. The **log-ingestion** step (`log_source` → `logs/<v>.parquet`) lives in `notebook/real/01_export_v2.ipynb` since 2026-08-09 (`scoring/ingest.py` deleted — only v2 has a production log; the source is a version-bound pandas pickle, so it must be read inside env-v2 anyway). The log→inputs split (`build_inputs.py`) touches no model and runs in the analysis `.venv`. The standalone real-data onboarding util **`scoring/inspect_pickle.py`** (loads a prod pickle to report its schema + date range) is env-dependent by *content*, not by design: a plain-data DataFrame pickle loads in the analysis `.venv`, but if the pickle proves to hold a fitted model / custom classes it must be opened in that version's env (same rule as `predict.py`). It self-diagnoses the two traps — a `numpy._core` error ⇒ the writer used numpy ≥ 2.0 (match the major version), a missing repo module ⇒ a model pickle needing its version env. Note *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
 
 ### `shap` belongs in the per-version envs too *(added 2026-07-14)*
 
-**`src/scoring/attribute.py`** — the planned sibling of `predict.py`, emitting per-row SHAP attributions to `detection/<v>_attributions.parquet` for the `estimator/` layer — runs in the **per-version env**, for the same reason `predict.py` does: SHAP needs the model *object*, and a pkl only unpickles where its repo is importable (loading `models/*/baseline/v1.pkl` from the analysis `.venv` raises `ModuleNotFoundError: fttl_v1`). That has a concrete env consequence:
+**`src/scoring/attribute.py`** — the planned sibling of `predict.py`, emitting per-row SHAP attributions to `detection/shap/<v>_attributions_<split>.parquet` for the `estimator/` layer — runs in the **per-version env**, for the same reason `predict.py` does: SHAP needs the model *object*, and a pkl only unpickles where its repo is importable (loading `models/*/baseline/v1.pkl` from the analysis `.venv` raises `ModuleNotFoundError: fttl_v1`). That has a concrete env consequence:
 
 > **`shap` must be installed and pinned in `env-v1`/`env-v2`/`env-v3`**, not only in the analysis `.venv` — and independently per version, because each env's XGBoost differs and `shap`'s tree parser is coupled to the XGBoost model format.
 
@@ -255,7 +287,7 @@ Commit `pyproject.toml` + `uv.lock` (analysis), and each version's spec files, s
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock` for the stricter option) and build the env.
 2. Add a `"v4"` entry to `config.VERSIONS` (and to `VERSION_LABELS`): its `paths`, its `columns` mapping, its `python`. Run `python src/config.py` to confirm nothing is left as a placeholder.
-3. Run `ingest.py` then `build_inputs.py` to produce `data/<source>/inputs/targets_v4.parquet`.
+3. Write a `notebook/real/01_export_v4.ipynb` (the per-version export notebook — the pattern of `01_export_v1/2/3`) to land v4's log/inputs as canonical parquet, then `build_inputs.py` for `targets_v4.parquet`.
 4. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis.
 
-No new class is required, and **no driver script is edited** — `score_all.py` and `train_all.py` loop `config.VERSION_LABELS`, so registering the version in config is what adds it to the run. `ingest.py`, `build_inputs.py`, `train.py`, `predict.py` and `load_scores.py` are all version-agnostic. See `DESIGN.md`.
+No new class is required, and **no driver script is edited** — `score_all.py` and `train_all.py` loop `config.VERSION_LABELS`, so registering the version in config is what adds it to the run. `build_inputs.py`, `train.py`, `predict.py` and `load_scores.py` are all version-agnostic; only the export notebook is per-version, because each repo's artefact layout is. See `DESIGN.md`.

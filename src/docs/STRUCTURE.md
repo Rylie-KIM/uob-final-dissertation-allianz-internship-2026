@@ -41,7 +41,7 @@ repo/
     ├── estimator/            # "how bad / by what mechanism?" — see § "Five layers"
     │   ├── concentration.py       # [now] Hill / Shannon / Simpson / Gini / top-k on mean|φ|, plus
     │   │                          #   require_comparable() — refuses versions attributed under
-    │   │                          #   different SHAP backends. L0 names only.
+    │   │                          #   different SHAP backends. The model's own raw column names only.
     │   ├── effect_estimator.py    # [plan] EffectEstimator ABC: assumptions() + falsify() + estimate()
     │   ├── rdd.py                 # notebook 04_01 — τ as a sharp discontinuity (needs payout)
     │   ├── shap_did.py            # notebook 04_02 — corruption footprint in the feature-dependence
@@ -59,12 +59,13 @@ repo/
     │                         #   No synthetic/real subclasses — config's `source` handles that.
     │
     ├── scoring/              # VERSION LAYER — runs inside env-vX; the only code that opens a pkl
-    │   ├── ingest.py          # log_source → log   ("ingest" = the doorway for external artefacts:
-    │   │                      #   their FILE name AND their COLUMN names → ours, via schema.py)
+    │   │                      # (ingest.py deleted 2026-08-09: the log_source → log translation is
+    │   │                      #   absorbed into notebook/real/01_export_v2.ipynb — only v2 has a
+    │   │                      #   production log; column renames still go through schema.py)
     │   ├── build_inputs.py    # canonical log → inputs/targets_<v>  (features are NOT carved from
     │   │                      #   the log — they are the preprocessor pickle's output)
     │   ├── predict.py         # model + features → detection/<v>_scores
-    │   ├── attribute.py       # [now] model + features → detection/<v>_attributions + _meta.json
+    │   ├── attribute.py       # [now] model + features → detection/shap/<v>_attributions + _meta.json
     │   │                      #   (per-row φ; the sibling of predict.py — SHAP must run where the
     │   │                      #   pkl unpickles). Backends: shap TreeExplainer (interventional,
     │   │                      #   shared background) or the booster's own pred_contribs (needs no
@@ -88,8 +89,12 @@ repo/
     │   ├── retrain.py         # MITIGATED retrainer — clones baseline hyperparams, weighted
     │   ├── train_all.py       # [now] driver; SKIPS any version whose paths.model is declared
     │   └── spec.py
-    ├── envs/                 # specs + build notes only, no code (each vN/ also holds .venv/)
-    │   └── v1/ · v2/ · v3/    #  v1/requirements.txt records how env-v1 was REALLY built
+    ├── envs/                 # specs + build notes; the one script here inspects envs, never builds
+    │   ├── v1/ · v2/ · v3/    #  v1/requirements.txt records how env-v1 was REALLY built
+    │   └── check_installed.py #  audits a pyproject's deps across N venvs at once (repo .venv vs
+    │                          #  envs/vN/.venv); reports version drift + PEP 610 git/local origins
+    │   └── LOCAL_STANDIN.md   # what the LOCAL .venvs are and are not — v3 matches its pin
+    │                          #   (xgboost 3.2.0), v1/v2 cannot and deliberately carry none
     │
     ├── models/
     │   ├── synthetic/
@@ -100,6 +105,10 @@ repo/
     │       └── mitigated/ …
     │
     └── data/
+        ├── make_dummy_real.py # writes a FAKE data/real/ tree with the REAL shapes, so the chain
+        │                      #   runs on the local laptop; seeded RNG, no Allianz value. Guarded
+        │                      #   by a _DUMMY_DATA marker and --clean. Never run it where the
+        │                      #   real exports live. See § "The local dummy tree".
         ├── synthetic/         # ⚠ THE WHOLE SUBTREE IS A STAND-IN — deleted when real data lands.
         │   │                  #   App code must NEVER import from it. Notebooks may use ALL of it.
         │   ├── run.py · evaluate.py · export_thresholds.py
@@ -111,10 +120,12 @@ repo/
         │   ├── detection/     #  │ Unrelated to ① — a scaffold that proves the app WIRING,
         │   ├── mitigation/    #  │ not a dataset anyone analyses. Mirrors data/real/ exactly.
         │   └── reeval/        #  ┘ (see § "Three worlds", and the two @TODOs there)
-        └── real/
+        └── real/          # gitignored (src/data/real/) — real exports, or the dummy stand-in
+            ├── _DUMMY_DATA    #   present ⇒ this tree is fake and disposable; absent ⇒ treat as real
             ├── logs/
             ├── inputs/
             ├── detection/
+            │   └── shap/      # per-row φ + sidecar meta: <v>_attributions_<split>.parquet / _meta.json
             ├── mitigation/
             └── reeval/
 ```
@@ -195,9 +206,9 @@ different pickle filenames, different column names, different places for the pro
 a path.
 
 ```python
-config.path("model",    "v2")          # -> that version's pickle, wherever it really lives
-config.path("features", "v2")          # -> that version's feature matrix
-config.path("scores",   "v2")          # -> where WE write its recomputed scores
+config.path("model", "v2")                                # -> that version's pickle, wherever it lives
+config.path("processed_inputs", "v2", split="test")       # -> that split's feature matrix
+config.path("scores", "v2", split="test")                 # -> where WE write its recomputed scores
 config.column("v2", "date")            # -> "ReportedDate"   (v1: "lossdate", v3: "ReportedDate_CLAIM")
 ```
 
@@ -205,7 +216,7 @@ config.column("v2", "date")            # -> "ReportedDate"   (v1: "lossdate", v3
 
 | | kinds | resolution |
 |---|---|---|
-| `READ_KINDS` | `model` · `log` · `features` · `targets` · `raw_input` | already exist in the real repo → **declared** per version in `VERSIONS[v]["paths"]` |
+| `READ_KINDS` | `model` · `preprocessor` · `log_source` · `processed_inputs` · `raw_dataset` | already exist in the real repo → **declared** per version in `VERSIONS[v]["paths"]` |
 | `WRITE_KINDS` | `scores` · `attributions` · `corrected` · `mitigated` · `reeval_scores` | this project produces them → **`FALLBACK`** template under our own tree |
 
 **A declared path always beats the template, for every kind.** That is the whole point: a kind moves
@@ -238,12 +249,78 @@ schema had no business in a real-data config, and nothing imported them. Noteboo
 now **optional everywhere** (`pipeline.py --oracle-col`, off by default) rather than required, since
 real data cannot have it: a scrapped car is never sent to a garage.
 
+### Some kinds exist ONLY per split (added 2026-08-18)
+
+The export notebooks (`notebook/real/01_export_v{1,2,3}.ipynb`) write **one file per split and no
+unsplit base file** — `features_v2_train.parquet`, `features_v2_val.parquet`,
+`features_v2_test.parquet`, and nothing called `features_v2.parquet`. `config.SPLIT_KINDS` names
+the kinds this applies to: `processed_inputs` · `targets` · `scores`, plus everything derived from
+one of them (`attributions` · `corrected` · `mitigated` · `reeval_scores`).
+
+So `config.path()` **requires** `split=` for those kinds and **rejects** it for the rest, rather
+than resolving to a filename nothing produces:
+
+```python
+config.path("processed_inputs", "v2", split="test")   # inputs/features_v2_test.parquet
+config.path("processed_inputs", "v2")                 # ValueError — which split?
+config.path("log", "v2", split="test")                # ValueError — the log has no splits
+config.path("scores", "v2", split="oot")              # KeyError  — v2's splits are train/val/test
+```
+
+**Split names are each version's own and are never unified** (`config.SPLITS`): v1 and v2 invert
+what `test` means, only v3 has `oot`, only v1 has `val1`/`val2`. `config.OOT_SPLIT` records which
+one is each version's **out-of-time holdout** — `{"v1": "val2", "v2": "test", "v3": "oot"}`
+(v1 confirmed 2026-08-18; note v1's OOT is *not* its `test`). A cross-version comparison should
+put every version on the same *kind* of split, or part of the difference is
+in-sample-vs-out-of-sample rather than the fitted functions. That is why the drivers take a
+mapping — `--split v2=test v3=oot` — and a bare `--split test` is only shorthand for "this name,
+for every version named". `config.resolve_splits()` is the one parser; it validates before any
+subprocess is launched.
+
+**Why this is not just plumbing.** The split decides what a number means. SHAP concentration
+measured on `train` describes the fitted function on data it saw; on a holdout it describes
+generalisation; one version on train against another on a holdout is a confound, not a finding. So
+the split is stamped into the output filename **and** into the attribution sidecar meta, and
+`concentration.require_comparable()` prints it back when the versions disagree.
+
+**Pooling is available but must be typed.** `loaders.load(v, split=config.ALL_SPLITS)` reads every
+split and concatenates, adding a `split` column so the pooling stays visible in the frame itself.
+Use it where the analysis is a *population* statement across versions — `02_error_inheritance` is
+the case — and drop the marker before any cross-version join, since v1's `test` and v2's `test` are
+different sets.
+
 **What this does NOT unify:** the decision rule. `DECISION_RULES` keeps v1 segmented, v2
 piecewise, v3 global, because that is a difference in *meaning*, not in naming — see § "τ has two
 sources". Config unifies names; it must never flatten semantics.
 
 `python src/config.py` reports remaining placeholders; `--paths` and `--columns` print the full
 resolved mapping.
+
+### The local dummy tree (added 2026-08-18)
+
+`src/data/real/` is gitignored and holds one of two things, depending on the machine:
+
+| machine | what is there | marker |
+|---|---|---|
+| company laptop | the real exports from `notebook/real/01_export_v{1,2,3}.ipynb` | none |
+| local laptop | a fake set from `python src/data/make_dummy_real.py` | `_DUMMY_DATA` |
+
+The generator writes every kind at its real path with its real per-split filenames, canonical
+columns, each version's own raw feature names, each version's date window, and score distributions
+with deliberate mass **above** each cutoff and in the **boundary band** just below it — so the
+detector, the RDD window, `03_02`'s corrector and `02_error_inheritance`'s band all have rows to
+work on. v1 and v2 share a claim-id pool (v2's window sits inside v1's production era) while v3
+does not, which is the real join structure.
+
+Two things it does not fake, on purpose: **v1's and v3's production logs** (destroyed / never
+deployed — the single hardest constraint the project works under), and the **model pickles**
+(`paths.model` is declared per version and resolves through `repo_dir`, which is a placeholder
+off-site). So locally the data half of the chain runs and the model half stops with a message
+naming the config entry to fill — which is the correct outcome, not a gap in the dummy set.
+
+`--clean` removes exactly the files listed in the marker. The `_guard` refuses to write into a
+tree holding files it did not write, so the first run on the company laptop stops before touching
+a real export.
 
 ## Five layers, split by which artefacts each one opens
 
@@ -252,7 +329,7 @@ The layer boundaries are not conceptual — they follow mechanically from **what
 | layer | reads | answers | opens a pkl? |
 |---|---|---|---|
 | `detector/` | `detection/<v>_scores` + `inputs/targets_<v>` | **Is there a loop?** | no |
-| **`estimator/`** ★ | the above + `detection/<v>_attributions` + τ | **How harmful? By what mechanism?** | **no** — see below |
+| **`estimator/`** ★ | the above + `detection/shap/<v>_attributions` + τ | **How harmful? By what mechanism?** | **no** — see below |
 | `mitigator/` | `inputs/{features,labels}_<v>` | **How do we fix it?** | no |
 | **`reeval/`** ★ | **TWO artefact sets** (before + after) | **What changed?** | no |
 | `scoring/` · `training/` | the model itself | (produces everything above) | **yes — only these** |
@@ -262,7 +339,7 @@ naively makes it the first analysis layer that must open a pkl. It must not. **T
 inside their version env** (they carry that repo's `FeatureBuilder`; loading `models/*/baseline/v1.pkl`
 from the analysis `.venv` raises `ModuleNotFoundError: fttl_v1`, and this will be equally true of the
 real pkls). So attribution runs in the Version Layer — **`scoring/attribute.py`, the sibling of
-`predict.py`** — and emits `detection/<v>_attributions.parquet`. `estimator/` then reads that parquet
+`predict.py`** — and emits `detection/shap/<v>_attributions.parquet`. `estimator/` then reads that parquet
 and never touches a model. The two-layer split is preserved.
 
 **Built 2026-08-01** (`attribute.py` · `attribute_all.py` · `estimator/concentration.py` ·
@@ -274,9 +351,13 @@ than assumed:
 >   in a frozen version env but is **tree-path-dependent**, so part of any difference is a training
 >   distribution. `concentration.require_comparable()` **raises** on a mixed set — silently mixed
 >   backends produce a plausible-looking number.
-> - **Which rows.** `attribute_all.py` intersects the versions' `claim_id`s and samples once, so every
->   version explains the same claims; `--per-version-sample` is available but warns, because it makes
->   every difference case-mix confounded.
+> - **Which rows.** `attribute_all.py` samples **per version**, because the windows leave no claim
+>   common to all three (v2 2018-01→2020-09, v3 2023-06→2026-05). Every cross-version difference is
+>   therefore case-mix confounded, as a **standing** caveat. `--shared-claims` takes the
+>   intersection instead, for a pair that genuinely overlaps in time (v1/v2), and refuses an empty
+>   one rather than sampling silently. Even a shared claim set would not make the φ vectors
+>   directly comparable — the versions consume different feature matrices under different column
+>   names, so the reading still goes through `features/feature_overlap.json`.
 > - **Which configuration produced it.** The estimator's hyperparameters are captured in the meta, so
 >   the notebook can print them beside the concentration figures — the standing requirement of
 >   `problem.md` §1.4c (no adjacent version pair is configuration-matched, and L1 concentrates
@@ -302,7 +383,7 @@ follow from where it runs, and `src/shap_kit.py` exists to absorb them:
 >   release and `shap_kit.env_report(strict=True)` raises on a mismatch — loading a pickle under the
 >   wrong stack otherwise yields a complete set of plausible figures for the wrong model.
 >
-> It writes the *same* `detection/<v>_attributions.parquet` + `_meta.json` as `attribute.py`, so the
+> It writes the *same* `detection/shap/<v>_attributions.parquet` + `_meta.json` as `attribute.py`, so the
 > interactive and headless routes are interchangeable and `00_shap_attribution.ipynb` (the
 > cross-version comparison) reads whichever produced them.
 
