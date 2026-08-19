@@ -301,10 +301,15 @@ VERSIONS: dict[str, dict] = {
         "columns": {
             "claim_id": PLACEHOLDER,     # not read off yet — check clean_dataset.pkl
             "date": "ReportedDate",      # confirmed 2026-07-29
-            "score": PLACEHOLDER,        # whatever the live log calls the model output
-            "decision": PLACEHOLDER,     # whatever the live log calls the fast-track flag
-            "observed": "veh_total_loss",  # par.TARGET in training (confirmed); the LIVE log's
-                                           #   outcome column name may differ — verify at ingest
+            # The live log's model output. Spelling is the repo's, typo included — read off the
+            # log itself 2026-08-19. Do not "fix" it here; this is the real column name.
+            "score": "FastTrackerProbablity",
+            "decision": "FastTrackerDecision",     # whatever the live log calls the fast-track flag
+            "observed": "veh_total_loss",  # par.TARGET in TRAINING data (confirmed). The LIVE
+                                           #   log carries NO outcome column: 01_export_v2_logs
+                                           #   joins it from the v3 extract's `Fttl` on claim
+                                           #   number, so the log's observed arrives under v3's
+                                           #   name, not this one (2026-08-19).
             "mobility": None,            # v2's rule is global — not needed
         },
         "trained_on": "v1",           # concept, not a column — see the note on v1

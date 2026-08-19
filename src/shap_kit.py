@@ -236,7 +236,7 @@ def describe_features(X: pd.DataFrame) -> pd.DataFrame:
     """Per-column profile: type, cardinality, missingness, spread, and its one-hot family.
 
     The family is the prefix before the last underscore — a heuristic for grouping `make_FORD`,
-    `make_BMW`, … It is for READING the table only. Never aggregate SHAP by it: the L0 raw names
+    `make_BMW`, … It is for READING the table only. Never aggregate SHAP by it: the the model's own raw column names
     are the measurement; cross-version correspondence lives ONLY in the hand-confirmed mapping
     (features/check_overlap.py -> features/feature_overlap.json).
     """
@@ -557,13 +557,13 @@ def plot_beeswarm_abs(att: Attribution, top_n: int = 20, title=None, max_points:
 # Everything above draws from the raw phi matrix with plain matplotlib, because this module has to
 # run under env-v1 as well (Python 3.5, shap 0.28 at best, xgboost 0.72) and that stack predates
 # shap's modern API entirely. The helpers below are the escape hatch for the envs where that
-# constraint does NOT bind — env-v2 (py3.10) and env-v3 (py3.11) can both install a current shap.
+# constraint does NOT bind: env-v2 carries shap 0.40 and env-v3 shap 0.49, both well past the 0.36
+# release that introduced Explanation.
 #
-# They add pictures; they do not replace any. The cross-version figures must stay drawn by the SAME
-# code for all three versions, or a difference between two panels is partly a difference between
-# two renderers (different orderings, different clipping, different colour normalisation). So use
-# these for reading ONE version closely, and keep plot_bar/plot_beeswarm for anything that appears
-# beside another version.
+# They add pictures; they do not replace any. A cross-version figure must be drawn by the SAME code
+# for all three versions, or part of the difference between two panels is a difference between two
+# renderers (different ordering, clipping, colour normalisation). Use these to read ONE version
+# closely; keep plot_bar/plot_beeswarm for anything that appears beside another version.
 
 MODERN_SHAP_MIN = (0, 36)   # shap 0.36 (Sep 2020) introduced Explanation + shap.plots.*
 
@@ -589,13 +589,13 @@ def shap_capability() -> dict:
 def explanation(att: Attribution, feature_names=None):
     """Wrap an ALREADY COMPUTED Attribution as a `shap.Explanation`. Nothing is recomputed.
 
-    This is the whole trick: phi, the base value and the feature matrix are what an Explanation
-    holds, and we have all three. So shap's plotting layer can draw our numbers without a second
-    TreeSHAP pass and without a second reference distribution — the plots below and the plots above
-    are guaranteed to be the same values.
+    phi, the base value and the feature matrix are exactly what an Explanation holds, and we have
+    all three. So shap's plotting layer draws our numbers without a second TreeSHAP pass and
+    without a second reference distribution: these plots and the hand-drawn ones above are
+    guaranteed to be the same values.
 
-    Raises where shap is too old, naming the env, because that is a fact about the environment and
-    not something a caller can work around.
+    Raises where shap is too old, naming the cause, because that is a fact about the environment
+    rather than something the caller can work around.
     """
     cap = shap_capability()
     if not cap["explanation"]:
@@ -614,7 +614,7 @@ def explanation(att: Attribution, feature_names=None):
     )
 
 
-def native_plot(kind: str, expl, *, show: bool = False, **kwargs):
+def native_plot(kind: str, expl, show: bool = False, **kwargs):
     """Call one of shap.plots.* and hand BACK the figure, so figstyle.save can take it.
 
     shap draws onto the current figure and calls plt.show() itself unless told not to; every
@@ -624,9 +624,10 @@ def native_plot(kind: str, expl, *, show: bool = False, **kwargs):
     import matplotlib.pyplot as plt
     import shap
 
-    fn = getattr(shap.plots, kind, None)
+    fn = getattr(getattr(shap, "plots", None), kind, None)
     if fn is None:
-        raise AttributeError(f"shap.plots has no {kind!r} in shap {shap.__version__}")
+        raise AttributeError(
+            "shap.plots has no %r in shap %s" % (kind, shap_capability()["version"]))
     fn(expl, show=show, **kwargs)
     return plt.gcf()
 

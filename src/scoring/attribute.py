@@ -11,7 +11,7 @@ Nothing about the numbers is version-specific once they are on disk.
 
 --features is the POST-preprocessing matrix, exactly as predict.py consumes it (confirmed
 2026-07-31: the real repos pickle the preprocessor separately, and predict_proba takes the
-already-transformed columns). Feature columns therefore keep their **L0 raw names**, which is what
+already-transformed columns). Feature columns therefore keep their **the model's own raw column names**, which is what
 SHAP and the concentration measures must be indexed by. Cross-version correspondence comes only
 from the hand-confirmed mapping (features/check_overlap.py -> features/feature_overlap.json).
 
@@ -324,7 +324,7 @@ def main() -> None:
         "feature_order": order,
         "n_rows": int(len(out)),
         "n_features": len(feature_cols),
-        "feature_names": feature_cols,          # L0 — the level SHAP must be compared at
+        "feature_names": feature_cols,          # the model's own names — the level SHAP must be compared at
         "background_n": 0 if X_bg is None else int(len(X_bg)),
         "explain_ids_file": a.explain_ids,
         "background_ids_file": a.background_ids,
