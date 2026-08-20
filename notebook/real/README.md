@@ -79,13 +79,35 @@ analysis `.venv`. It reports the raw-column-name feature overlap, the concentrat
 (Hill / Shannon / Simpson / Gini / top-k, `src/estimator/concentration.py`), and refuses to compare
 versions whose attributions were produced under different SHAP backends.
 
+It runs **three configurations in one execution**, not one split hard-coded at the top: `analyze()`
+is called once per row of
+
+| run | split | backend | question |
+|---|---|---|---|
+| `interventional_train` | `"train"` (identical name in all three of `config.SPLITS`) | `shap`, interventional | concentration on data the fit saw |
+| `interventional_oot` | each version's own holdout (`config.OOT_SPLIT`) | `shap`, interventional | concentration on unseen data — the notebook's old default |
+| `path_dependent` | same split as `interventional_oot` | `native`, tree-path-dependent | isolates the backend as the only variable |
+
+and a final table/figure puts all three side by side per version.
+
 Its input can equally be produced headlessly, without opening a notebook per env:
 
 ```bash
 python src/scoring/attribute_all.py --split test --dry-run     # resolve paths, write nothing
 python src/scoring/attribute_all.py --split test --rows 5000 --background 500
 python src/scoring/attribute_all.py --split v2=test v3=oot     # per version (only v3 has "oot")
+
+# the notebook's three runs, concretely (v1 val2 · v2 test · v3 oot for the holdout rows):
+python src/scoring/attribute_all.py --split train
+python src/scoring/attribute_all.py --split v1=val2 v2=test v3=oot
+python src/scoring/attribute_all.py --split v1=val2 v2=test v3=oot --backend native --out-suffix _native
 ```
+
+`--out-suffix` (on `attribute_all.py` only) exists because `config.path("attributions", ...)` is
+keyed by `(version, split)`, not by backend — attributing the same split under `native` after
+`shap` would otherwise overwrite the first parquet. The notebook reads a suffixed file by an
+explicit path; `loaders.VersionData` itself has no suffix parameter and is not meant to grow one
+for what is a one-off robustness check, not a permanent second axis.
 
 `--split` is required and is not bookkeeping: φ files exist only per split, and concentration
 measured on `train` (the fitted function on data it saw) is a different statement from
