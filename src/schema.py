@@ -30,7 +30,7 @@ import config
 
 CLAIM_ID = "claim_id"
 DATE = "date"
-SCORE = "score"
+SCORE = "score" # only used for v2 logs for now (2026-08-19)
 DECISION = "decision"
 OBSERVED = "observed"
 MOBILITY = "mobility"
