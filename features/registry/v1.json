@@ -1,0 +1,28 @@
+{
+  "version": "v1",
+  "model_path": "<DUMMY \u2014 local stand-in, not the real pickle>",
+  "pipeline_repr": "XGBClassifier",
+  "raw_features": [],
+  "model_features": [
+    "make_FORD",
+    "make_VAUXHALL",
+    "make_BMW",
+    "make_AUDI",
+    "make_VW",
+    "make_NISSAN",
+    "make_TOYOTA",
+    "make_MERCEDES",
+    "make_PEUGEOT",
+    "make_RENAULT",
+    "make_KIA",
+    "make_OTHER",
+    "age_of_vehicle",
+    "estimated_repair_cost",
+    "vehicle_value",
+    "airbag_deployed",
+    "damage_severity",
+    "n_damaged_areas",
+    "driveable",
+    "vehicle_mobility_status_code"
+  ]
+}

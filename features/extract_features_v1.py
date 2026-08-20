@@ -1,4 +1,4 @@
-"""v1-only feature-name extractor — the Python 3.5 twin of extract_features.py.
+"""v1-only feature-name extractor -- the Python 3.5 twin of extract_features.py.
 
 WHY A SEPARATE FILE. `extract_features.py` already produced `features/registry/v2.json` and
 `features/registry/v3.json` and must not be touched. It cannot produce v1's, for two reasons that
@@ -11,7 +11,7 @@ are both properties of env-v1 and not of the code:
     that import is a SyntaxError too. This script therefore takes the paths as arguments and never
     imports config.
 
-WHAT IT WRITES — byte-for-byte the same schema as extract_features.py, so `check_overlap.py` and
+WHAT IT WRITES -- byte-for-byte the same schema as extract_features.py, so `check_overlap.py` and
 every registry reader treat all three versions identically:
 
     {
@@ -25,38 +25,44 @@ every registry reader treat all three versions identically:
 No extra keys: a v1 file that carried fields the others lack would make the three registries
 non-comparable, which is the one thing this registry exists to prevent.
 
-TWO PICKLES. v1 keeps the fitted preprocessing and the estimator in SEPARATE files (confirmed
-2026-07-31), so `--model` alone yields `model_features` and an EMPTY `raw_features`. Pass
-`--preprocessor` as well to fill both. Names read off v1's own training script:
+--preprocessor IS OPTIONAL, AND USUALLY NOT WORTH PASSING. v1 keeps the fitted preprocessing and
+the estimator in SEPARATE files (confirmed 2026-07-31); the estimator gives `model_features`, the
+preprocessor gives `raw_features`. But **nothing in this repo reads `raw_features`** -- the
+registry's only consumer, `check_overlap.py`, validates against `model_features` alone. Meanwhile
+the preprocessor is the pickle that holds custom transformer classes, so it is the one that raises
+`ModuleNotFoundError` unless the version repo is on sys.path (see ENV_MANAGEMENT.md, the fttl.pth
+step). Passing --model on its own avoids that entirely and loses nothing that is used.
+
+Names read off v1's own training script:
 
     outputs/fasstacker_xgb.pkl     the estimator   -> model_features
     outputs/fttl_pipeline.pkl      the preprocessor -> raw_features
 
-  (verify the spelling against `dir outputs` — "fasstacker" vs "fasttracker" is transcribed, not
+  (verify the spelling against `dir outputs` -- "fasstacker" vs "fasttracker" is transcribed, not
    confirmed. A typo just fails with FileNotFoundError, so it is safe to try as-is.)
 
-USAGE — run with env-v1's own interpreter, from the repo root. ONE LINE, so no continuation
+USAGE -- run with env-v1's own interpreter, from the repo root. ONE LINE, so no continuation
 character is involved and it is the same in PowerShell and cmd:
 
-    src\\envs\\v1\\.venv\\python.exe features\\extract_features_v1.py --model model_repos\\real\\<v1-repo>\\outputs\\fasstacker_xgb.pkl --preprocessor model_repos\\real\\<v1-repo>\\outputs\\fttl_pipeline.pkl
+    src\\envs\\v1\\.venv\\python.exe features\\extract_features_v1.py --model model_repos\\real\\<v1-repo>\\outputs\\fasstacker_xgb.pkl
 
-If you do split it over lines, the continuation character is SHELL-SPECIFIC — ` in PowerShell,
+If you do split it over lines, the continuation character is SHELL-SPECIFIC -- ` in PowerShell,
 ^ in cmd. This repo's SETUP.md is written for PowerShell, where a stray ^ is passed to the script
 as a literal argument and the remaining lines run as separate commands. Backtick, and nothing
 after it on the line:
 
     src\\envs\\v1\\.venv\\python.exe features\\extract_features_v1.py `
         --model        model_repos\\real\\<v1-repo>\\outputs\\fasstacker_xgb.pkl `
-        --preprocessor model_repos\\real\\<v1-repo>\\outputs\\fttl_pipeline.pkl
+       
 
 Writes features/registry/v1.json. Add `--dry-run` to print what it found without writing.
 
 =============================================================================
-!! PYTHON 3.5 COMPATIBLE ON PURPOSE — DO NOT MODERNISE !!
+!! PYTHON 3.5 COMPATIBLE ON PURPOSE -- DO NOT MODERNISE !!
 No f-strings, no future annotations, no builtin generics, no pathlib-only APIs
 that arrived after 3.5. Old sklearn (pre-1.0) has no `feature_names_in_`, so
 raw-column recovery walks the pipeline for the attributes bespoke transformers
-actually use — see `_raw_from_pipeline`.
+actually use -- see `_raw_from_pipeline`.
 =============================================================================
 """
 # PYTHON 3.5 COMPATIBLE ON PURPOSE
@@ -70,33 +76,11 @@ REGISTRY = os.path.join(HERE, "registry")
 
 VERSION = "v1"
 
-#: Attribute names that hold a raw column list on a fitted transformer. sklearn only grew the
-#: standard `feature_names_in_` in 1.0, and env-v1 predates that by years, so the bespoke
-#: spellings are tried too. Order is preference: the standard name first.
 COLUMN_ATTRS = ("feature_names_in_", "columns", "columns_", "feature_names", "feature_names_",
                 "input_columns", "input_columns_", "cols", "cols_", "variables", "variables_")
 
 
 def _load_any(path):
-    """Unpickle `path`, trying every loader that could have WRITTEN it. Returns (obj, loader).
-
-    WHY THIS IS NOT JUST joblib.load. env-v1 carries scikit-learn 0.19.1 (Oct 2017), which
-    bundles its own copy of joblib as `sklearn.externals.joblib` — and v1's training code is of
-    that era, so the pickle was very likely written by the BUNDLED joblib, not the standalone one.
-
-    The two are not interchangeable on read, and the failure is silent-then-fatal. The stream
-    records the wrapper's full class path, `sklearn.externals.joblib.numpy_pickle
-    .NumpyArrayWrapper`. Standalone joblib 0.14 constructs that class happily (sklearn is
-    installed, so it resolves), then checks `isinstance(obj, NumpyArrayWrapper)` against ITS OWN
-    class — which is a different object, so the check is False, so it never reads the array's raw
-    bytes out of the file. Those bytes stay in the stream and are read as opcodes:
-
-        KeyError: 0        <- a \x00 from inside the array data, at pickle.py's dispatch[key[0]]
-
-    So the loaders are tried writer-first. Each is attempted in full; the first that returns
-    without raising wins, and which one it was gets printed, because it is a fact about the
-    artefact worth knowing.
-    """
     attempts = []
 
     def _sklearn_joblib():
@@ -137,7 +121,7 @@ def _load_any(path):
     for name, why in attempts:
         lines.append("    {0:<28} {1}".format(name, str(why)[:120]))
     lines.append("")
-    lines.append("A `KeyError: <n>` from every loader means the pickle stream desynced — the file")
+    lines.append("A `KeyError: <n>` from every loader means the pickle stream desynced -- the file")
     lines.append("was written by a stack this env cannot reproduce. Check `dir` beside the pkl for")
     lines.append(".npy sidecars (very old joblib), and compare this env's scikit-learn/numpy")
     lines.append("against the v1 repo's conda_dependencies_local.yml.")
@@ -167,12 +151,7 @@ def _raw_from_object(obj):
 
 
 def _raw_from_pipeline(prep):
-    """Raw claim columns the preprocessor expects.
-
-    Tries, in order: the pipeline object itself, then each step from the first forward. The FIRST
-    step is the one that sees raw input, so its column list is the right one; later steps are only
-    consulted because some pipelines put a column selector second (after a no-op validator).
-    """
+    """Raw claim columns the preprocessor expects."""
     if prep is None:
         return [], "no preprocessor given"
 
@@ -191,12 +170,8 @@ def _raw_from_pipeline(prep):
 
 
 def _model_from_estimator(est):
-    """Post-preprocessing column names — what the booster literally consumed.
-
-    xgboost 0.72 does expose `get_booster()`, and the booster carries `feature_names` whenever it
-    was fitted from a named frame. That is the authoritative answer and the one to prefer.
-    """
-    if hasattr(est, "steps"):                     # a Pipeline was pickled after all
+    """Post-preprocessing column names -- what the booster literally consumed."""
+    if hasattr(est, "steps"):     # a Pipeline was pickled after all
         est = est.steps[-1][1]
 
     if hasattr(est, "get_booster"):
@@ -214,12 +189,14 @@ def _model_from_estimator(est):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Write features/registry/v1.json (env-v1, Python 3.5)")
+    p = argparse.ArgumentParser(description="Write features/registry/v1.json")
     p.add_argument("--model", required=True,
-                   help="v1's ESTIMATOR pickle, e.g. .../outputs/fasstacker_xgb.pkl")
+                   help="v1's ESTIMATOR pickle")
     p.add_argument("--preprocessor", default=None,
-                   help="v1's fitted PREPROCESSOR pickle, e.g. .../outputs/fttl_pipeline.pkl. "
-                        "Without it raw_features is written empty.")
+                   help="OPTIONAL, and usually not worth passing. It only fills "
+                        "raw_features, which nothing in this repo reads, and it is the pickle "
+                        "that needs the version repo importable -- leaving it off avoids "
+                        "ModuleNotFoundError entirely.")
     p.add_argument("--out", default=None, help="default: features/registry/v1.json")
     p.add_argument("--dry-run", action="store_true", help="print what was found, write nothing")
     a = p.parse_args()
@@ -232,9 +209,7 @@ def main():
         print("xgboost not importable: {0}".format(exc))
 
     if not os.path.isfile(a.model):
-        raise SystemExit("\n--model {0} does not exist.\n"
-                         "Check the spelling against `dir outputs` — 'fasstacker' vs "
-                         "'fasttracker' is transcribed, not confirmed.\n".format(a.model))
+        raise SystemExit("\n--model {0} does not exist.\n".format(a.model))
 
     est, est_loader = _load_any(a.model)
     print("estimator: {0}  (via {1})".format(type(est).__name__, est_loader))
@@ -259,9 +234,7 @@ def main():
     if model_features:
         print("  first 8: {0}".format(model_features[:8]))
 
-    # `pipeline_repr` is the loaded object's class name — same field extract_features.py writes.
-    # It reports the PREPROCESSOR where one was given (that is what "pipeline" means for v1's two
-    # pickles), and the estimator otherwise, so the field is never empty.
+    # `pipeline_repr` is the loaded object's class name -- same field extract_features.py writes.
     payload = {
         "version": VERSION,
         "model_path": os.path.abspath(a.model),
@@ -272,24 +245,19 @@ def main():
 
     if not model_features:
         print("\n  WARNING: no model-ready feature names recovered. SHAP output will be "
-              "positional only — resolve this before comparing across versions.")
-        print("  Next thing to try: v1's booster may have been fitted from a bare numpy array, in")
-        print("  which case the names exist only in the training script's column list. Read them")
-        print("  off `inputs_transformed.pkl`'s columns (minus the target) inside this env.")
+              "positional only -- resolve this before comparing across versions.")
     if not raw_features and prep is not None:
         print("\n  NOTE: the preprocessor exposes no raw column list under any of the names tried")
         print("  ({0}).".format(", ".join(COLUMN_ATTRS)))
-        print("  raw_features is written empty. It is used only by check_overlap.py's raw-side")
-        print("  validation, so model_features being present is the load-bearing half.")
 
     if a.dry_run:
-        print("\ndry run — nothing written")
+        print("\ndry run -- nothing written")
         return
 
     if not os.path.isdir(REGISTRY):
         os.makedirs(REGISTRY)
     out = a.out if a.out else os.path.join(REGISTRY, VERSION + ".json")
-    with open(out, "w") as fh:
+    with open(out, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
     print("\n[{0}] raw={1} model={2} -> {3}".format(
         VERSION, len(raw_features), len(model_features), out))

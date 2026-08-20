@@ -1,0 +1,39 @@
+{
+  "version": "v3",
+  "model_path": "<DUMMY \u2014 local stand-in, not the real pickle>",
+  "pipeline_repr": "XGBClassifier",
+  "raw_features": [
+    "make_FORD",
+    "make_VAUXHALL",
+    "make_BMW",
+    "make_AUDI",
+    "make_VW",
+    "make_OTHER",
+    "AgeOfVehicle_VEH",
+    "EstimatedRepairCost_VEH",
+    "VehicleValue_VEH",
+    "AirbagsDeployed_VEH",
+    "DamageSeverity_VEH",
+    "NumberOfDamagedAreas_VEH",
+    "Roadworthy_VEH",
+    "ExtricationRequired_VEH",
+    "TotalLossPropensity"
+  ],
+  "model_features": [
+    "make_FORD",
+    "make_VAUXHALL",
+    "make_BMW",
+    "make_AUDI",
+    "make_VW",
+    "make_OTHER",
+    "AgeOfVehicle_VEH",
+    "EstimatedRepairCost_VEH",
+    "VehicleValue_VEH",
+    "AirbagsDeployed_VEH",
+    "DamageSeverity_VEH",
+    "NumberOfDamagedAreas_VEH",
+    "Roadworthy_VEH",
+    "ExtricationRequired_VEH",
+    "TotalLossPropensity"
+  ]
+}
