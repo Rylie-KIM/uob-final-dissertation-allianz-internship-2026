@@ -82,6 +82,10 @@ READ_KINDS = (
                      #   stage applied before the fitted one (see README training-flow section).
     "log_source",         # the production scored log AS THAT VERSION EMITTED IT — their column
                           #   names. ONLY v2 has one: v1's was destroyed, v3 was never deployed.
+                          #   Read via the v2 repo's lvanalytics.evaluation_helpers, which
+                          #   hands back ONE frame carrying raw + transformed + prediction
+                          #   columns together; split into the log_raw / log_features /
+                          #   log_scores / log_targets kinds below.
     "processed_inputs",   # POST-preprocessing matrix: what the model consumes. v1 ships one
                           #   appended file (train+test+val1+val2), v2 ships three TIMESTAMPED
                           #   files, v3 none. (Renamed from "features", 2026-08-09 — pairs with
@@ -91,14 +95,28 @@ READ_KINDS = (
 )
 
 WRITE_KINDS = (
-    "log",            # log_source with its columns RENAMED to ours — 01_export_v2.ipynb writes
-                      #   it (only v2 has a production log), and it is the only log anything
-                      #   downstream reads. (scoring/ingest.py did this; absorbed 2026-08-09.)
-    "log_features",   # the PRODUCTION LOG's transformed feature matrix: claim_id + the model's
-                      #   own feature columns, one row per logged claim. Only v2 has one. Not a
-                      #   SPLIT kind — the log is a single row set, and it is NOT one of the
-                      #   training splits: those rows come from the Z: transformed frames
-                      #   (`processed_inputs`), these from what production actually scored.
+    "log",            # ONE ROW PER CLAIM, canonical names: claim_id, date, score, decision,
+                      #   observed. Built by 01_export_v2_logs.ipynb from `log_scores` +
+                      #   `log_targets`, and collapsed
+                      #   to one scoring event per claim there. Only v2 has one, and it is the
+                      #   only log anything downstream reads — `loaders.load("v2").log` and
+                      #   `threshold.read_off`. (scoring/ingest.py did this; absorbed 2026-08-09.)
+    # ---- the v2 production log, split by column into four kinds -----------------------
+    # `v2_logs` is not one kind of data: it is the raw claim frame joined to the transformed
+    # matrix (on claim number + correlation id, `suffix="_transformed"`) with the prediction
+    # columns alongside. Exported as one file, nothing tells raw apart from what the model
+    # actually consumed — the suffix lands ONLY on colliding names, so an uncollided
+    # transformed column arrives bare. Split by COLUMN instead, with param.py MODEL_FEATURES
+    # as the judge. All four carry BOTH key columns: a claim number alone is not a key here,
+    # since one claim can be scored more than once.
+    # They mirror the per-split vocabulary one level up (raw_dataset / processed_inputs /
+    # scores / targets), at LOG grain instead of split grain.
+    "log_raw",        # the raw claim frame production scored, PRE-preprocessing. Their names.
+    "log_features",   # the transformed matrix production fed the model: keys + param.py
+                      #   MODEL_FEATURES in FIT ORDER (that order is only knowable in env-v2).
+    "log_scores",     # what production emitted back: keys + score + decision, canonical names.
+    "log_targets",    # keys + date + observed, canonical names. The log carries NO outcome —
+                      #   observed is the v3 extract's `Fttl`, joined on claim number here.
     "targets",        # claim_id + date + observed, DERIVED at ingest. No version ships this as
                       #   its own artefact — the target is a column inside raw/features
                       #   (v1/v2 `veh_total_loss`, v3 `Fttl`), so we extract it ourselves.
@@ -173,7 +191,10 @@ FALLBACK: dict[str, str | None] = {
     "preprocessor":     "src/models/{source}/baseline/{v}_prep.pkl",
     "log_source":       None,   # no sensible default — must be declared
     "log":              "src/data/{source}/logs/{v}.parquet",
-    "log_features":     "src/data/{source}/logs/features_{v}_log.parquet",
+    "log_raw":          "src/data/{source}/logs/{v}_raw.parquet",
+    "log_features":     "src/data/{source}/logs/{v}_features.parquet",
+    "log_scores":       "src/data/{source}/logs/{v}_score.parquet",
+    "log_targets":      "src/data/{source}/logs/{v}_targets.parquet",
     "processed_inputs": "src/data/{source}/inputs/features_{v}.parquet",   # filename kept: docs
                                                                            #   reference it
     "targets":          "src/data/{source}/inputs/targets_{v}.parquet",
@@ -560,6 +581,32 @@ def column(version: str, canonical: str) -> str:
             f"config.VERSIONS['{version}']['columns']['{canonical}'] is still a placeholder."
         )
     return value
+
+
+FEATURE_REGISTRY = ROOT / "features" / "registry"
+
+
+def registry_path(version: str) -> pathlib.Path:
+    """features/registry/<v>.json — that version's feature names, read off its own pickles.
+
+    A PATH resolver, not a store: the names themselves are never declared in this file. They are
+    derived from the fitted objects by ``features/extract_features.py``, which must run inside
+    that version's env, and the JSON records both sets:
+
+        raw_features    what the PREPROCESSOR expects   (pairs with the "raw_dataset" artefact)
+        model_features  what the BOOSTER consumes       (pairs with "processed_inputs")
+
+    ``model_features`` is the answer to "which columns of the matrix are model inputs" — which is
+    not a question the matrix answers for itself, since every version's export carries the target
+    alongside the inputs (and v3's its own saved predictions). Prefer the booster where the model
+    is already open; read this where it is not.
+
+    Declaring the names here instead would create a second source of truth free to drift from the
+    pickles — the failure mode 01_export_v2.ipynb documents for its pasted MODEL_FEATURES list.
+    """
+    if version not in VERSIONS:
+        raise KeyError(f"unknown version {version!r}; expected one of {VERSION_LABELS}")
+    return FEATURE_REGISTRY / f"{version}.json"
 
 
 def rename_map(version: str) -> dict[str, str]:
