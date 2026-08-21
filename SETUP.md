@@ -358,8 +358,8 @@ uv run jupyter lab          # then pick the kernel per notebook
 | notebook | kernel |
 |---|---|
 | `notebook/real/00_SHAP.ipynb` | `fttl-v1` / `fttl-v2` / `fttl-v3` — run it once on each |
-| `notebook/real/00_shap_attribution.ipynb` | `sfp-detection` (the analysis `.venv`) |
-| everything in `notebook/` | `sfp-detection` |
+| `notebook/real/00_shap_attribution.ipynb` | `ml-sfp-detection` (the analysis `.venv`) |
+| everything in `notebook/` | `ml-sfp-detection` |
 
 Confirm the kernel is the one you think it is — the first cell prints it, but as a manual check:
 

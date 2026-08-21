@@ -54,15 +54,15 @@ This is the concrete size of the contamination `pre_ml_label` carried *before* t
 - **No calibration:** XGBoost outputs probability-like scores but these are not calibrated. Since the model is used purely for ranking/triage (not expected-value-based decisions), well-calibrated probabilities are deemed unnecessary and the calibration step is omitted. **Note:** If scores are used as propensity weights (e.g. for IPS correction), the lack of calibration may distort debiasing — this is flagged as a known limitation in the SFP mitigation analysis.
 - **Decision threshold:** The scrap policy applies an **absolute score cutoff** — a vehicle is fast-tracked to salvage only when `model_score ≥ τ_v`, where `τ_v` is the cutoff tuned on the validation set to satisfy precision ≥ 0.985 **for that model version**. This is **not** a percentile/top-N rule. Because the cutoff is fixed in score space, the *scrap rate* moves freely with the score distribution — this is precisely the mechanism by which score drift in later model versions becomes observable as an increased scrap rate (= the key SFP signal).
 
-  > **Threshold is per-version, not a universal constant.** What is invariant across versions is the **business constraint (precision ≥ 0.985)** and the fact that the cutoff lives in **score space (absolute, never a percentile)**. The cutoff *value* `τ_v` differs by version because each model's score distribution differs, so a different absolute threshold is needed to hold the same precision target. **`0.872` is the documented real-world value for v2** — and only until **2026-06-30 14:30 UK time**, when v2 moved to **0.825** (§1.4b); v1 uses a segmented pair (0.75/0.85, §1.4a) and v3 is unconfirmed. The synthetic generator now **tunes `τ_v` per version** at deployment — the lowest cutoff holding precision ≥ 0.985 on a held-out validation slice, scored against that version's (SFP-contaminated) training label — with `0.872` retained only as the fallback when the target is unreachable (`generate/model.py::_tune_threshold`). Synthetic tuned values land near the real anchor (v1 ≈ 0.852, v2a ≈ 0.906, distribution-dependent). Wherever this document writes the threshold as `0.872`, read it as the v2 instance of `τ_v`. See `README.md` for the canonical statement.
+  > **Threshold is per-version, not a universal constant.** What is invariant across versions is the **business constraint (precision ≥ 0.985)** and the fact that the cutoff lives in **score space (absolute, never a percentile)**. The cutoff *value* `τ_v` differs by version because each model's score distribution differs, so a different absolute threshold is needed to hold the same precision target. **`0.872` is the documented real-world value for v2** — and only for **two of v2's five threshold regimes** (2021-06-03 → 2024-06-02, 2026-02-25 → 2026-06-30); v2 also ran at **0.8915** and, currently, at **0.825** (§1.4b); v1 uses a segmented pair (0.75/0.85, §1.4a) and v3 is unconfirmed. The synthetic generator now **tunes `τ_v` per version** at deployment — the lowest cutoff holding precision ≥ 0.985 on a held-out validation slice, scored against that version's (SFP-contaminated) training label — with `0.872` retained only as the fallback when the target is unreachable (`generate/model.py::_tune_threshold`). Synthetic tuned values land near the real anchor (v1 ≈ 0.852, v2a ≈ 0.906, distribution-dependent). Wherever this document writes the threshold as `0.872`, read it as the v2 instance of `τ_v`. See `README.md` for the canonical statement.
 
   > **⚠️ The policy *form* is NOT invariant across versions** (confirmed 2026-07-29). v1 applies **two** cutoffs segmented by vehicle mobility (§1.4a); v2 applies **one** global cutoff (§1.4b). Only the *absolute-cutoff-in-score-space* property is shared; the cutoff's **arity** differs by version. Wherever this document assumes a single scalar `τ_v` per version, that holds for v2 but **not** for v1.
 
   > **Operational note — threshold change history (v2)** *(superseded 2026-07-29)*: the earlier account was that v2's threshold was briefly changed away from 0.872, that performance degraded, and that it was **promptly reverted** — licensing the working assumption that v2's threshold is constant at 0.872 throughout production.
   >
-  > **✅ Update (2026-07-29, read from v2 `score.py`):** the threshold is **currently `0.825`**, changed from `0.872` and **still in force** — not reverted. ✅ **Exact break confirmed 2026-07-31: 2026-06-30 14:30 UK local (BST) = 13:30 UTC** (supersedes the earlier "≈ 2026-07-01" estimate). **v2's threshold is piecewise-constant with one documented break, not constant.** Full specification and consequences in §1.4b. ⚠️ An **earlier** change is also confirmed (`0.825 → 0.872` at 2026-02-25 16:26 UK), so there are at least two — but how far back the 0.825 era before it ran **cannot be recovered**; the record is broken there. Carried as a limitation in §1.4b-lim, not resolved.
+  > **✅ Update (2026-08-18, full change history supplied — supersedes the 2026-07-29 and 2026-07-31 readings):** v2's threshold **moved four times**, giving **five regimes**, and it **alternates**: `0.8915` → (2021-06-03) `0.872` → (2024-06-02) `0.825` → (2026-02-25) `0.872` → (2026-06-30) `0.825`, currently in force. Only the *start* of the opening 0.8915 era is unknown. Because 0.872 and 0.825 each name two regimes years apart, **a threshold value does not identify a regime**. Full specification in §1.4b; the old §1.4b-lim gap is closed.
   >
-  > **✅ The 2026-06-25 researcher concern is closed for v3.** The worry was that a threshold change might have overlapped a retraining window, injecting decisions made under a different cutoff into the training labels. **v3's training logs are confirmed to come entirely from the τ = 0.872 regime** — v3 trains on a policy-homogeneous log. The concern remains live for analysis on the **current** v2 production log (which now spans both regimes) and for any **future** retrain.
+  > **❌ The 2026-06-25 researcher concern is CONFIRMED for v3, not closed.** The worry was that a threshold change might have overlapped a retraining window, injecting decisions made under a different cutoff into the training labels. **That is what happened:** v3's window (2023-06-01 → 2026-05-01) contains **two** changes (2024-06-02, 2026-02-25), and its OOT slice (2025-12-01 → 2026-05-01) contains one. The earlier "v3 trains on a policy-homogeneous log" statement is **retracted** — it was true of the June 2026 break only, which was the sole change then known.
 
 ```
 Full data timeline
@@ -214,7 +214,7 @@ Key points + things to verify:
 
 **v1 runtime environment (confirmed via `conda_dependencies_local.yml`): Python 3.5.2, pandas 0.22.0** (numpy pin not stated in the yml — 🔎 confirm). Two consequences:
 - Pins v1 to a **very old stack** (2016–2017 era), consistent with the deprecated `silent=` XGBoost arg above and the per-version environment-isolation constraint (§2.5 #7).
-- **Even v1's *data* pickle is env-bound, not just its model pickle.** A DataFrame serialised by pandas 0.22.0 will very likely **not** unpickle under a modern pandas (2.x) — the internal BlockManager format changed across that gap — so v1's `inputs.pkl` (`…/Prod-Predictions/`) must be opened **inside v1's env**. The real-data onboarding util `src/scoring/inspect_pickle.py` is written **Python-3.5.2-compatible on purpose** for exactly this (used to recover v1's unknown last date — see §1.4d).
+- **Even v1's *data* pickle is env-bound, not just its model pickle.** A DataFrame serialised by pandas 0.22.0 will very likely **not** unpickle under a modern pandas (2.x) — the internal BlockManager format changed across that gap — so v1's `inputs.pkl` (`…/Prod-Predictions/`) must be opened **inside v1's env**. `notebook/real/01_export_v1.ipynb` is written **Python-3.5-compatible on purpose** for exactly this, and exports the pickle to parquet for the analysis env (it recovered v1's unknown last date — see §1.4d). The earlier one-off inspector `src/scoring/inspect_pickle.py` was deleted 2026-08-19, its job absorbed into that notebook.
 
 #### v1 scrapping threshold — segmented by vehicle mobility (creates a score-space overlap band)
 
@@ -443,7 +443,8 @@ Regularisation is strikingly asymmetric: **L1 `reg_alpha = 20.0`** (default 0 �
 - **v2 remains re-derivable end-to-end** and, its log also surviving, stays the anchor for anything needing observed production behaviour.
 - **⚠️ The v1 → v2 hand-off loses its observational side.** The old fallback — "infer it from v1's production log" — is **gone with that log**. v1's production scores/decisions must now be **reconstructed** by re-scoring v1's surviving artefact on surviving feature rows, making them *reconstructed*, not *observed*. This bears directly on §1.4a's mobility overlap band and on the error-inheritance detector, both of which assume v1-side production behaviour. 🔎 Feasibility depends on feature-space compatibility — see `features/`.
   - **✅ Partial mitigation found 2026-08-08:** v1's **train-time scored file survives** on the `Z:` drive — `predictions.pkl`, columns `[claimnumber, predictions]`, covering all four splits (2016-01-01 → 2018-02-09 on `lossdate`). These are scores the *actual* fitted v1 produced at training time, so for those rows no re-scoring is needed — only the production **decisions** and post-2019 scores remain reconstruction targets. Caveat: train-split rows are in-sample; treat them accordingly. See `README.md` § "Training Flow & Artefact Storage by Version".
-- **⚠️ The `…/Prod-Predictions/inputs.pkl` reference in §1.4a is stale** — that artefact is part of the missing log. `src/scoring/inspect_pickle.py` remains useful for v1's *training* pickle, under the same pandas-0.22.0 constraint.
+- **⚠️ The `…/Prod-Predictions/inputs.pkl` reference in §1.4a is stale** — that artefact is part of the missing log. (`src/scoring/inspect_pickle.py` deleted 2026-08-19 — `notebook/real/01_export_v1.ipynb` reads v1's *training* pickle inside env-v1 instead, under the same pandas-0.22.0 constraint.)
+- **✅ v3's train-time scores survive too (2026-08-10).** Its Z:-drive transformed files carry the training run's own predictions as columns — `fttl_predicted_prob` and the thresholded `fttl_predicted_label` — so v3's scores, like v1's, need no re-scoring (in-sample caveat on the train split applies equally). ⚠️ A predicted label is **not** a decision: v3 never actioned a car, so these columns give v3 no observational side — the canonical `decision` stays undefined for v3 and real treatment data comes only from v2's log.
 - **v2b is still not reproducible on real data — justification inverted.** It mixes `pre_ml_label` (now ✅ available) with the v1 log (now ❌ gone). Conclusion unchanged, reason reversed.
 
 #### The decision rule — a single global cutoff (no mobility segmentation)
@@ -458,43 +459,39 @@ predictions["FastTrackerDecision"] = (
 2. **The policy *form* is therefore genuinely NOT invariant.** v1 = **two** mobility-keyed cutoffs (0.75/0.85); v2 = **one** global cutoff. The claim in §1.4 that the form is invariant is **false as stated** — the invariant is narrower: *an absolute cutoff in score space, never a percentile*, with the cutoff's **arity** differing by version.
 3. **The comparison is strict `>`, not `≥`.** This document and the synthetic generator write `D = 1[s ≥ τ]`; production is `D = 1[s > τ]`. Measure-zero for continuous scores, but reproduction code should use `>`. 🔎 Confirm the exact column spellings (`FastTrackerDecision` vs `FasterTrackerProbability` — the "Fast"/"Faster" mismatch is transcribed as read and appears to be a real inconsistency in the production code).
 
-#### Threshold history — v2 is piecewise-constant, not constant
+#### Threshold history — v2 has five regimes, and the threshold alternates
 
-| Period | Threshold | Status |
-|---|---|---|
-| Deployment → 2026-06-30 14:30 | **0.872** | superseded |
-| 2026-06-30 14:30 → present | **0.825** | **currently in force** |
+| Regime | Period | Threshold | Note |
+|---|---|---|---|
+| 1 | … → 2021-06-03 | **0.8915** | era *start* unknown; regime left open on the left |
+| 2 | 2021-06-03 → 2024-06-02 | **0.872** | the value this project used to call "v2's threshold" |
+| 3 | 2024-06-02 → 2026-02-25 | **0.825** | ~20 months; **inside v3's window** |
+| 4 | 2026-02-25 → 2026-06-30 | **0.872** | 16:26 UK local (GMT); **inside v3's window** |
+| 5 | 2026-06-30 → present | **0.825** | **in force**; 14:30 UK local (BST) = 13:30 UTC |
 
-- ✅ **Break instant confirmed (2026-07-31): 2026-06-30, 14:30 UK local time** (BST, UTC+1) = **2026-06-30 13:30 UTC**. Supersedes the earlier "≈ four weeks before 2026-07-29 / ≈ 2026-07-01" estimate.
-- **It is an instant, not a date — 2026-06-30 straddles both regimes.** Two consequences for date-cut analysis: (i) if the log's date column is **date-only**, every 2026-06-30 row parses to 00:00 and is assigned pre-change even where the decision was actually made at 0.825 → **drop 2026-06-30** unless a timestamp exists; (ii) if the timestamps are **UTC**, the boundary is **13:30**, not 14:30, and a one-hour band of rows flips regime. 🔎 Confirm the log column's timezone and time granularity (new open item 1b).
-- Recorded once in `src/config.py::DECISION_RULES["v2"]` (`break_at_local` / `break_at_utc` / `break_tz`); `src/threshold.py::apply()` converts tz-aware date columns to `Europe/London` before comparing. No other file may hard-code the date.
-- The threshold was **lowered**: a lower bar scraps **more** claims, so the post-change regime mechanically produces **more forced positives** per unit volume.
-- Supersedes the "briefly changed, promptly reverted, treat as constant" note in §1.4. 🔎 Unconfirmed whether this is that same episode or a **second** change (→ three regimes).
+- **A threshold value does not identify a regime.** 0.872 = regimes 2 and 4; 0.825 = regimes 3 and 5. Select by date span, never by τ value, and never index `regimes` positionally (`regimes[0]` is now the open-ended 0.8915 era).
+- **Whole-day resolution throughout.** Only the two 2026 changes are known to the minute (16:26 and 14:30 UK local); 2021-06-03 and 2024-06-02 are day-only. The change date is assigned to the **new** regime, so at most one morning of claims per break sits in the wrong regime. Drop the break day itself for any analysis sensitive to a single day at the cutoff. 🔎 The log column's timezone and time granularity is still open item 1b.
+- Recorded once in `src/config.py::DECISION_RULES["v2"]["regimes"]` — the five spans, and nothing else. The changes are **derived** from consecutive spans by `config.breaks(v)`, never stored, so there is no second copy to drift out of sync. `threshold.apply()` tiles the half-open spans and raises on a gap; `config.spans_a_break(v, start, end)` answers "is this window single-regime?" (empty list = yes). No other file may hard-code a date or a threshold.
+- **Direction is a mechanism, not a finding.** Three changes lowered the bar and one raised it; a lower bar scraps more, hence more forced positives per unit volume. The SFP reading of the lowering was retired 2026-08-02 (below).
+- Supersedes the "briefly changed, promptly reverted, treat as constant" note in §1.4 — **wrong in both parts**: the pre-2026-02-25 episode at 0.825 ran ~20 months, and it was not a revert.
 
-**✅ v3's training data is single-regime.** All v3 training logs were generated under `threshold = 0.872`; the 0.825 regime lies entirely after v3's training window. This **closes the 2026-06-25 researcher concern for v3**. It stays open for analysis on the current v2 log (which spans both regimes) and for any future retrain. **Practical rule:** any per-row analysis on the real v2 log must either restrict to the pre-change regime (matching v3's training data) or carry the regime as an explicit covariate — silently pooling conflates two different treatment assignments.
+**❌ v3's training data is NOT single-regime — claim withdrawn (2026-08-18).** v3's window spans `0.872` (2023-06-01 → 2024-06-02), then `0.825` (→ 2026-02-25), then `0.872` (→ 2026-05-01), with the 0.825 segment contributing the majority of it; the OOT slice (2025-12-01 → 2026-05-01) straddles 2026-02-25 on its own. Consequences: (a) v3's labels span three policy segments; (b) the loosest bar covered most of the window, so **more** of v3's positive labels are forced positives than the single-regime reading assumed — the error runs against the project, not in its favour; (c) v3's recall-collapse result (§2.3) was measured on a holdout straddling a break and must be reported with the regime split or re-measured within one. **Practical rule:** any per-row analysis on the v2 log must restrict to one of the five spans or carry the regime as a covariate; pooling regimes 2 and 4 additionally manufactures a *false* homogeneity, since both read 0.872 while being ~5 years apart.
 
-> ⚠️ **Conditional on the change record being complete — it is not.** See §1.4b-lim below. The claim is **retained, not withdrawn**; the exposure is carried as a limitation.
+#### 1.4b-lim ✅ CLOSED (2026-08-18) — the record now reaches back to 2021-06-03
 
-#### 1.4b-lim Limitation — the threshold change record is incomplete before 2026-02-25
+*(This section previously read "Limitation — the threshold change record is incomplete before 2026-02-25" and hedged the v3 single-regime claim against it.)*
 
-**A known gap in the source record, stated rather than fixed.** A *second, earlier* change is confirmed:
+**The gap is closed.** How long 0.825 had run before 2026-02-25: **since 2024-06-02**. Before that, 0.872 since **2021-06-03**, and 0.8915 before that. All four changes are confirmed and encoded in `config.DECISION_RULES["v2"]["regimes"]`; `known_unmodelled_break` is deleted.
 
-| Instant (UK local) | Change | UTC |
-|---|---|---|
-| **2026-02-25 16:26** | `0.825 → 0.872` | 16:26 UTC (February = GMT, UTC+0) |
-| **2026-06-30 14:30** | `0.872 → 0.825` | 13:30 UTC (June = BST, UTC+1) |
+**What is still unknown, and why it is harmless.** The *start* of the opening 0.8915 era. It ends 2021-06-03 — two years before v3's window opens, and after v2's own training data (2018-01-02 → 2020-09-30, which sat under v1's segmented rule) has already closed. It is encoded as a regime with no `from` bound, so `apply()` covers those rows without a guessed start date and without leaving a gap.
 
-So 0.825 was already in force for some period *before* 2026-02-25, but **how long is unrecoverable — the deployment/change record does not reach back past that point.** (Note the two instants sit in different UTC offsets; one fixed offset applied to both is wrong.)
+**What the hedge cost.** The exposure it described was real: the prior 0.825 era **did** reach into v3's window, by ~20 months. The single-regime claim is withdrawn in §1.4b above, and with it the "upper bound on policy homogeneity" framing — there is no bound to state, only the actual three-segment composition.
 
-**Not encoded, on purpose.** The February change is recorded in `config.DECISION_RULES["v2"]["known_unmodelled_break"]` but is **not** a `regimes` entry. Encoding it needs a start date for the prior era; inventing one would silently relabel years of v2 log rows on a guess — worse than a documented gap.
+**The reasoning error worth keeping.** The old argument was that the exposure rested on a fact the record could not supply, so the finding should stand with the possibility noted. The fact was not unobtainable — it simply had not been asked for. **Where a one-directional hedge protects a load-bearing claim and the missing fact is obtainable from a person, obtain it before publishing.**
 
-**What it exposes.** v3's window (2023-06-01 → 2026-05-01) and its OOT slice (2025-12-01 → 2026-05-01) both **contain** 2026-02-25. If the prior 0.825 era reached into that window: (a) v3's training labels span two policies, not one; (b) v3's recall-collapse result — load-bearing in the SFP narrative (§2.3) — was measured on a holdout straddling a policy break; (c) the 2026-06-25 researcher concern is **live** for v3, not closed.
+**Still worth running.** Assignment is a hard cutoff, so `min{score | scrapped}` per period estimates the τ then in force. `read_off()` month-by-month across the v2 log should now show steps at **exactly** the four recorded dates — a validation of the table, and the only way to catch a fifth unrecorded change. 🔎 Cheap; run it before trusting the table.
 
-**Why the claim still stands.** The exposure is conditional on a fact the record cannot supply, and retracting a documented finding on an unmeasurable possibility swaps one unsupported claim for another. What *is* certain is the **direction**: an unrecorded regime can only add heterogeneity, never remove it, so every result resting on v3's single-regime status is an **upper bound** on policy homogeneity.
-
-**Empirical substitute (does not need the record).** Assignment is a hard cutoff, so `min{score | scrapped}` in any period estimates the τ then in force. Running `read_off()` month-by-month across v3's window would make an unrecorded regime **visible as a step** in that series. 🔎 Cheap — run it first.
-
-Carried in the dissertation as `report/paper/paper.mid.draft.md` §4.6.1 and README § "Limitation — the threshold change record is incomplete before 2026-02-25".
+Carried in the dissertation as `report/paper/paper.mid.draft.md` §4.6.1 and README § "✅ Resolved (2026-08-18) — the change record now reaches back to 2021-06-03".
 
 #### ~~The *lowering* as SFP evidence~~ — reading RETIRED (2026-08-02)
 
@@ -512,22 +509,25 @@ theory unfalsifiable.
 
 This **parallels the v1 mobility band (§1.4a) exactly, but in time rather than cross-section.** A claim scoring in (0.825, 0.872] was:
 
-| Regime | Decision for `s ∈ (0.825, 0.872]` | Garage outcome observed? |
-|---|---|---|
-| **Pre-change** (τ = 0.872) | **garage** | ✓ **yes — verified outcome exists** |
-| **Post-change** (τ = 0.825) | **scrap** | ✗ no — forced positive |
+| Regime | Period | τ | Decision for `s ∈ (0.825, 0.872]` | Garage outcome observed? |
+|---|---|---|---|---|
+| 1 | … → 2021-06-03 | 0.8915 | **garage** | ✓ yes |
+| 2 | 2021-06-03 → 2024-06-02 | 0.872 | **garage** | ✓ yes |
+| 3 | 2024-06-02 → 2026-02-25 | 0.825 | **scrap** | ✗ no — forced positive |
+| 4 | 2026-02-25 → 2026-06-30 | 0.872 | **garage** | ✓ yes |
+| 5 | 2026-06-30 → present | 0.825 | **scrap** | ✗ no — forced positive |
 
-- **Garage-verified outcomes exist for scores up to 0.872** (pre-change era). "**Zero garage rows above τ**" is, for v2, true only above **0.872** — not above the *current* 0.825.
-- **Positivity holds in the band when pooling across the break:** conditional on the score alone, `e(s) = Pr(D=1|s) = Pr(post-change | s) ∈ (0,1)` for `s ∈ (0.825, 0.872]`. Within *either* regime alone it is still a deterministic step function, so strict P4 is not dissolved.
-- **A cutoff-shift design becomes available** — the same claims treated differently across an exogenous policy break: DiD / RDD-with-moving-cutoff, with **two** discontinuity locations (0.872 pre, 0.825 post).
+- **Garage-verified outcomes exist for scores up to 0.872** — and, from regime 1, up to **0.8915**, giving a second band `(0.872, 0.8915]`. "**Zero garage rows above τ**" is, for v2, true only above **0.8915**.
+- **Positivity holds in the band when pooling across a break:** conditional on the score alone, `e(s) = Pr(D=1|s) = Pr(a 0.825 regime | s) ∈ (0,1)` for `s ∈ (0.825, 0.872]`. Within *any single* regime it is still a deterministic step function, so strict P4 is not dissolved.
+- **A cutoff-shift design becomes available**, and with four breaks it is far stronger than a single one afforded: the band's treated/control status **flips four times**, in alternating directions. A genuine cutoff effect must **change sign with the direction of the change** — anything moving the same way at every break is time trend, not policy. This is a falsification test that costs nothing to run.
 - **It anchors the mitigation counterfactual** with real observed outcomes for high-scoring vehicles (pre-change, 0.825–0.872).
 
 **⚠️ Two caveats — this band is weaker than v1's:**
 
 - **Confounded by time, not by an observed covariate.** v1's band is confounded by *mobility*, which is measured and adjustable. v2's is confounded by **calendar time** and everything moving with it — score drift, case-mix, FNOL/ENOL channel mix, seasonality, portfolio composition. There is no clean adjustment analogue; identification needs a parallel-trends-style assumption across the break — the assumption this project has already found violated at era boundaries.
-- **The post-change window is ~4.3 weeks** (2026-06-30 14:30 → 2026-07-31). Given the documented thinness of the scrapped partition, the band may be **underpowered before any modelling begins**. 🔎 Count rows in (0.825, 0.872] on each side of the break *first* and gate the analysis on that count. A date-only column forces dropping 2026-06-30 — the single most valuable day, sitting exactly on the break.
+- ~~**The post-change window is ~4.3 weeks**~~ — **largely lifted (2026-08-18).** That assumed the only 0.825 era began 2026-06-30. Regime 3 ran **~20 months at 0.825**, so the treated side has years of rows; the power objection now bites only on regimes 4 and 5 taken individually. 🔎 Still count rows in (0.825, 0.872] **per regime** first and gate on that count, dropping each break day if the column is date-only. Expect regime 3 to carry the analysis — at the cost of 20 months of drift inside it, which is why pairing regime 3 with its *adjacent* regimes (2, 4) is preferable to pairing 2 with 4 across a five-year gap.
 
-> **Open items for v2.** *Threshold:* ~~(1) exact change date~~ ✅ **closed 2026-07-31 — 2026-06-30 14:30 UK local (13:30 UTC)**; (1b) **timezone + time granularity of the log's date column** — decides whether the break is cuttable intra-day and whether the boundary is 14:30 or 13:30 (new); (2) ~~one change or two~~ ✅ **at least two — 2026-02-25 16:26 confirmed**; what remains is (2b) **when the first 0.825 era began — record broken, see §1.4b-lim** and (2c) **monthly `read_off()` across v3's window** as the empirical substitute; (3) stated rationale; (4) exact column spellings; (5) row counts in (0.825, 0.872] each side of the break, **excluding 2026-06-30 if the column is date-only**.
+> **Open items for v2.** *Threshold:* ~~(1) exact change date~~ ✅ **closed**; ~~(2) one change or two~~ ✅ **closed 2026-08-18 — four changes, five regimes**; ~~(2b) when the first 0.825 era began~~ ✅ **2024-06-02**; (1b) **timezone + time granularity of the log's date column** — decides whether any break is cuttable intra-day (all four run at whole-day resolution until answered); (2c) **monthly `read_off()` across the v2 log** — now a *validation* of the four dates rather than a substitute, and the only way to catch a fifth unrecorded change; (2d) **start of the opening 0.8915 era** — unknown and harmless (it ends 2021-06-03, before every window analysed here); (3) stated rationale per change; (4) exact column spellings; (5) row counts in (0.825, 0.872] **per regime**, excluding each break day if the column is date-only.
 > *Split:* (6) ~~the 80th-percentile `ReportedDate`~~ ✅ **resolved in effect 2026-08-04** — realised OOT starts 2019-12-02, filter non-binding; (7) realised split sizes (never nominal 80/20; windows now ✅, sizes still 🔎); (8) rows dropped by the 2020-08-24 filter (now known to sit inside the OOT block); (9) the train/validation split's `random_state` (`stratify=` now ✅ confirmed); (9b) **positive rate in Train / Validation / OOT Test** — a cheap drift check the stratification makes interpretable (note the OOT block spans COVID); (10) reporting-lag distribution (`ReportedDate − lossdate`) and its drift.
 > *Training config (⚠️ highest priority first):* (11) **which of `eta` / `learning_rate` actually took effect** — read the saved booster's config; (12) **v3's hyperparameters**, needed to know whether the SHAP-concentration comparison can run on a regularisation-matched pair; (13) whether `scale_pos_weight=4.5` was computed or tuned; (14) whether a hyperparameter search was run and what it optimised; (15) a **calibration curve on garage-verified rows**; (16) `train_test_split`'s `random_state`.
 > *Highest value of all:* (17) ~~cross-tab `veh_total_loss` × fast-track flag~~ ✅ **resolved 2026-08-04** — recorded `veh_total_loss` = 1 for fast-tracked vehicles, so **P1 applies to the live model through the data** (§1.4b); the cross-tab is retained only as a regression test.
@@ -670,9 +670,9 @@ Capacity controls differ as much: v3 uses **shallow, tightly-constrained trees**
 >
 > **✅ The largest single gain from the 2026-08-05 correction.** This confound was previously irreducible on the v1 → v2 pair — v1's data was believed destroyed, leaving only option (iii). With all three training sets in hand, the same configuration can be run on v1's, v2's and v3's data and the concentration difference read as attributable to the **data** rather than the regularisation. 🔎 Library-version matching (xgboost 1.4.2 vs 3.2.0) is a separate obstacle and is *not* solved by this.
 >
-> **Update 2026-08-02 — option (i) promoted to the primary design, as a dose–response experiment.** Because the feature spaces also diverge across versions (L0 sets/encodings differ — one-hot granularity moves the Simpson index mechanically, and 1/n normalisation removes only the floor), the cross-version contrast is confounded three ways (configuration, library, feature space). The identifying design is therefore a **controlled dose–response re-training inside v2's surviving data**: one pipeline / feature set / config / library, vary only the forced-positive content of the labels (dose 0 → observed → elevated via lowered cutoffs applied to garage rows), trace C(p) against dose. The observational v2 → v3 contrast is reported as corroboration only. Spec: `paper.mid.draft.md` §3.4.1 (threat (c) + remedy 1).
+> **Update 2026-08-02 — option (i) promoted to the primary design, as a dose–response experiment.** Because the feature spaces also diverge across versions (raw feature sets/encodings differ — one-hot granularity moves the Simpson index mechanically, and 1/n normalisation removes only the floor), the cross-version contrast is confounded three ways (configuration, library, feature space). The identifying design is therefore a **controlled dose–response re-training inside v2's surviving data**: one pipeline / feature set / config / library, vary only the forced-positive content of the labels (dose 0 → observed → elevated via lowered cutoffs applied to garage rows), trace C(p) against dose. The observational v2 → v3 contrast is reported as corroboration only. Spec: `paper.mid.draft.md` §3.4.1 (threat (c) + remedy 1).
 >
-> **Enforced in the tooling (2026-08-01).** That last requirement is no longer a discipline to remember: `src/scoring/attribute.py` captures the estimator's hyperparameters into `detection/<v>_attributions_meta.json` — the only process that can open the pickle — and `notebook/real/00_shap_attribution.ipynb` §4b renders them beside the concentration table, flagging exactly which knobs differ across the versions being compared. It does **not** resolve the confound; options (i)–(iii) still stand. It only makes it impossible to report the concentration numbers without the configuration next to them.
+> **Enforced in the tooling (2026-08-01; notebook restructured 2026-08-18 into three runs — train / OOT / path-dependent-backend — so this table is now computed once, not per run).** That last requirement is no longer a discipline to remember: `src/scoring/attribute.py` captures the estimator's hyperparameters into `detection/shap/<v>_attributions_<split>_meta.json` — the only process that can open the pickle — and `notebook/real/00_shap_attribution.ipynb` §3b renders them beside the concentration table, flagging exactly which knobs differ across the versions being compared. It does **not** resolve the confound; options (i)–(iii) still stand. It only makes it impossible to report the concentration numbers without the configuration next to them.
 
 > 🔎 **Confirm `reg_alpha` is genuinely absent from v3's call.** The list omits it, and also `objective` and `eval_metric`, so it may be partial. If v3 in fact sets `reg_alpha` near v2's value the confound narrows sharply. Also confirm v3's `eval_metric` — v2's `auc` is flagged in §1.4b as misaligned with the precision ≥ 0.985 constraint.
 
@@ -700,9 +700,13 @@ v3's window opens June 2023, **after v2 went live (~2022)**, so v3's training da
 
 > **Stronger than §1.5/§2.3 have been claiming.** The forced-label hand-off is not "partial contamination accumulating over generations" — at code level **each generation trains exclusively on its predecessor's forced labels**, with no clean-label component at any step. The chain `pre-ML → v1 → v2 → v3` is unbroken, and both hand-offs are confirmed from production window definitions — and, as of 2026-08-04, at the **label level** as well: the recorded `veh_total_loss` / `Fttl` is 1 for fast-tracked vehicles in every era, so the forced value demonstrably sits in each generation's target data.
 
-#### ✅ Independent corroboration: v3's window ends before the threshold break
+#### ❌ WITHDRAWN: "v3's window ends before the threshold break"
 
-v3's window closes **2026-05-01**; v2's threshold moved 0.872 → 0.825 at **2026-06-30 14:30 UK time** (§1.4b). The window ends **~2 months before the break**, **independently confirming** — from the data definition rather than the earlier report — that **all v3 training labels come from the `τ = 0.872` regime**. Two independent sources agree, so "v3 is policy-homogeneous" can be stated with confidence.
+*(Previously: v3's window closes 2026-05-01, the threshold moved on 2026-06-30, therefore all v3 labels come from the `τ = 0.872` regime — with the agreement of two sources treated as confirmation.)*
+
+**The premise was true and the conclusion false.** v3's window does end ~2 months before the **June 2026** break. It does not end before the **June 2024** or **February 2026** breaks, both of which fall *inside* it (§1.4b). The two sources agreed only because both reasoned from the same incomplete change record — a shared blind spot, not independent corroboration.
+
+**Test to use instead:** "no break *after* the window" is not "no break *inside* the window". `config.spans_a_break("v2", start, end)` answers the second; for v3 it returns two breaks, not zero.
 
 #### ⚠️ `immature_date` — the maturation buffer made explicit, and a dating puzzle
 
@@ -822,7 +826,7 @@ Consolidated reference. **Decimals are exactly as supplied from the real code; t
 | Parameter | **v1** | **v2** | **v3** |
 |---|---|---|---|
 | **target column** | `target` = `veh_total_loss ∨ veh_fast_track` ✅ *(disjunct = safeguard)* | **`veh_total_loss`** alone ✅ | `Fttl` **= `veh_total_loss` renamed** ✅ 2026-08-04 — all three carry the forced 1s in the data |
-| **scrap threshold** | 0.75 immobile / 0.85 mobile | 0.872 → **0.825** (2026-06-30 14:30 UK) | **0.984** @ prec 0.985; 0.970 @ prec 0.97 |
+| **scrap threshold** | 0.75 immobile / 0.85 mobile | **five regimes**: 0.8915 → 0.872 (2021-06-03) → 0.825 (2024-06-02) → 0.872 (2026-02-25) → **0.825** (2026-06-30) | **0.984** @ prec 0.985; 0.970 @ prec 0.97 |
 | `objective` | — *(implied multiclass)* | `binary:logistic` | 🔎 |
 | `eval_metric` | `mlogloss` | `auc` | 🔎 |
 | `n_estimators` | — *(default)* | 450 | **802** |
@@ -852,8 +856,11 @@ Split *sizes* remain TBD for v2/v3, but the **decision rules** are now partly co
 | Version | Decision rule | Arity | Confirmed? |
 |---|---|---|---|
 | **v1** | `D = 1[s > 0.75]` if immobile; `D = 1[s > 0.85]` if mobile | **two** cutoffs, segmented by mobility | ✅ 2026-07-28 (§1.4a) |
-| **v2** (→ 2026-06-30 14:30 UK) | `D = 1[s > 0.872]` | **one** global cutoff | ✅ 2026-07-29 (§1.4b); break instant ✅ 2026-07-31 |
-| **v2** (2026-06-30 14:30 UK →) | `D = 1[s > 0.825]` | **one** global cutoff | ✅ 2026-07-29 (§1.4b); break instant ✅ 2026-07-31 |
+| **v2** (→ 2021-06-03) | `D = 1[s > 0.8915]` | **one** global cutoff | ✅ 2026-08-18 (§1.4b) — era *start* unknown |
+| **v2** (2021-06-03 → 2024-06-02) | `D = 1[s > 0.872]` | **one** global cutoff | ✅ 2026-08-18 (§1.4b) |
+| **v2** (2024-06-02 → 2026-02-25) | `D = 1[s > 0.825]` | **one** global cutoff | ✅ 2026-08-18 (§1.4b) — **inside v3's window** |
+| **v2** (2026-02-25 → 2026-06-30) | `D = 1[s > 0.872]` | **one** global cutoff | ✅ 2026-08-18 (§1.4b) — **inside v3's window** |
+| **v2** (2026-06-30 →) | `D = 1[s > 0.825]` | **one** global cutoff | ✅ 2026-07-29 (§1.4b), in force |
 | **v3** | `D = 1[s > 0.984]` at precision 0.985 (`> 0.970` at precision 0.97) | **one** global cutoff | ✅ 2026-07-29 — but **never deployed** |
 
 **Where garage-verified outcomes exist above a scrap cutoff** — i.e. where the "zero garage rows above τ" premise (§2.6, mitigation/eval design) breaks:
@@ -861,9 +868,9 @@ Split *sizes* remain TBD for v2/v3, but the **decision rules** are now partly co
 | Version | Overlap band | Source of overlap | Confounder |
 |---|---|---|---|
 | **v1** | `(0.75, 0.85]` | **cross-sectional** — mobile vehicles garaged where immobile ones are scrapped | **mobility** (observed → adjustable) |
-| **v2** | `(0.825, 0.872]` | **temporal** — pre-change claims garaged where post-change ones are scrapped | **calendar time** (no single observed covariate → parallel-trends-style assumption) |
+| **v2** | `(0.825, 0.872]`, crossed at **all four** breaks; plus `(0.872, 0.8915]` from regime 1 | **temporal** — the same score is garaged in the 0.872/0.8915 regimes and scrapped in the 0.825 ones | **calendar time** (no single observed covariate → parallel-trends-style assumption) |
 
-Both bands are **confounded, not random**, so neither restores clean positivity — but both are exploitable, and both show the premise "no garage-verified outcome exists above the scrap cutoff" is **too strong as stated**. v1's band is the better identified (measured confounder); v2's is confounded by time and, post-change, spans only ~4 weeks.
+Both bands are **confounded, not random**, so neither restores clean positivity — but both are exploitable, and both show the premise "no garage-verified outcome exists above the scrap cutoff" is **too strong as stated**. v1's band is the better identified (measured confounder); v2's is confounded by time but is much larger than the "~4 weeks" figure recorded here before 2026-08-18 — regime 3 alone ran ~20 months at 0.825 — and its treated/control status flips four times, which is itself a falsification test.
 
 ### 1.5 Training Process (Insurance Company. alignment, 2-generation structure)
 
