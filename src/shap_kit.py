@@ -1015,16 +1015,24 @@ def _fmt(v):
 # ---- distributions and the threshold region ------------------------------------------
 
 
-def plot_distributions(X: pd.DataFrame, features, scores=None, tau=None, bins: int = 40,
-                       ncols: int = 3, title=None):
+def plot_distributions(X: pd.DataFrame, features, scores=None, tau=None, above=None,
+                       bins: int = 40, ncols: int = 3, title=None):
     """Input distributions, split by the fast-track cutoff when scores and tau are given.
 
     The split is the point: a tree model with a hard threshold acts on a REGION of input space, so
     the question is not just what each feature looks like overall but how the above-τ population
     differs. Binary features get rate bars; continuous features get overlaid histograms.
+
+    `above`, if given, is an exact per-row treatment mask (e.g. `src/threshold.py:apply`) and wins
+    over the `scores > tau` approximation — pass it whenever the exact rule is known, since a
+    piecewise (v2) or segmented (v1) rule's real boundary is not any single scalar tau.
     """
     features = list(features)
-    above = None if (scores is None or tau is None) else np.asarray(scores) >= tau
+    if above is not None:
+        above = np.asarray(above, dtype=bool)
+    else:
+        # STRICT, matching src/threshold.py — scoring exactly tau is garaged, not scrapped.
+        above = None if (scores is None or tau is None) else np.asarray(scores) > tau
     nrows = int(np.ceil(len(features) / float(ncols)))
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 2.5 * nrows))
     axes = np.atleast_1d(axes).ravel()
@@ -1084,22 +1092,32 @@ def plot_distributions(X: pd.DataFrame, features, scores=None, tau=None, bins: i
                    ("" if above is None else "  ·  below vs above the fast-track cutoff"))
 
 
-def score_bands(scores, tau, quantiles=(0.5, 0.9, 0.99)) -> "pd.Series":
+def score_bands(scores, tau, quantiles=(0.5, 0.9, 0.99), above=None) -> "pd.Series":
     """Label each claim: 'below τ', then quantile bands of the score WITHIN the above-τ region.
 
     Above the cutoff every claim gets the same action, so the interesting variation is how deep
     into the region it sits — a claim at τ+0.001 and one at 0.999 are treated identically by the
     policy but are not the same claim, and their attributions should not be pooled.
+
+    `above`, if given, is an exact per-row treatment mask (e.g. `src/threshold.py:apply`) and wins
+    over the `scores > tau` approximation — the lower band edge then comes from the mask's own
+    minimum score rather than the scalar tau, so a claim it marks "above" is never left mislabelled
+    "below τ" for scoring under tau's own value.
     """
     s = pd.Series(np.asarray(scores, dtype=float))
     labels = pd.Series(["below τ"] * len(s), index=s.index)
-    above = s >= tau
+    if above is not None:
+        above = pd.Series(np.asarray(above, dtype=bool), index=s.index)
+        lower = float(s[above].min()) if above.any() else float(tau)
+    else:
+        above = s > tau       # STRICT, matching src/threshold.py — scoring exactly tau is garaged
+        lower = float(tau)
     if above.sum() == 0:
         return pd.Series(pd.Categorical(labels, categories=["below τ"], ordered=True))
 
     # Named by PERCENTILE, not by the score value: above the cutoff the scores bunch against 1.0,
     # so value-based labels come out as "0.999..1.000" twice and stop distinguishing anything.
-    edges = [float(tau)] + [float(s[above].quantile(q)) for q in quantiles]
+    edges = [lower] + [float(s[above].quantile(q)) for q in quantiles]
     points = ["τ"] + [f"p{int(round(q * 100))}" for q in quantiles] + ["max"]
     names = [f"{points[i]}–{points[i + 1]}" for i in range(len(points) - 1)]
     for i, name in enumerate(names):
