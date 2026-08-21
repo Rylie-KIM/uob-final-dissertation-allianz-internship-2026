@@ -62,8 +62,10 @@ repo/
     │   │                      # (ingest.py deleted 2026-08-09: the log_source → log translation is
     │   │                      #   absorbed into notebook/real/01_export_v2.ipynb — only v2 has a
     │   │                      #   production log; column renames still go through schema.py)
-    │   ├── build_inputs.py    # canonical log → inputs/targets_<v>  (features are NOT carved from
-    │   │                      #   the log — they are the preprocessor pickle's output)
+    │   │                      # (build_inputs.py DELETED 2026-08-19 — it wrote the LOG's rows into
+    │   │                      #  targets_<v>_<split>, the export notebooks' own file, so its only
+    │   │                      #  remaining effect was to overwrite a split's targets with a
+    │   │                      #  different population. The export notebooks are the sole producer.)
     │   ├── predict.py         # model + features → detection/<v>_scores
     │   ├── attribute.py       # [now] model + features → detection/shap/<v>_attributions + _meta.json
     │   │                      #   (per-row φ; the sibling of predict.py — SHAP must run where the
@@ -76,19 +78,30 @@ repo/
     │   ├── attribute_all.py   # [now] the attribution driver. Also picks ONE claim set (id-column
     │   │                      #   intersection + seeded sample) so every version explains the same
     │   │                      #   rows — otherwise a concentration shift can be case-mix.
-    │   ├── load_scores.py
-    │   └── inspect_pickle.py  # [now] standalone real-data onboarding util (Windows-portable): loads a
-    │                          #   prod pickle (e.g. Z:/…/Prod-Predictions/inputs.pkl), reports schema +
-    │                          #   date range (→ find v1's unknown last date / tell v1 vs v2 by year).
-    │                          #   Prints hints for the numpy>=2 / model-pickle dependency traps.
+    │   └── load_scores.py     # (inspect_pickle.py DELETED 2026-08-19 — the one-off onboarding
+    │                          #  util that reported a prod pickle's schema + date range. Its job
+    │                          #  is done: the export notebooks 01_export_v{1,2,3} now read every
+    │                          #  Z: source inside its own env and write canonical parquet.)
     ├── preprocessing/
     │   ├── base.py
     │   └── v1.py · v2.py · v3.py
-    ├── training/             # VERSION LAYER — runs inside env-vX
-    │   ├── train.py           # BASELINE trainer — estimator only, on the production target
-    │   ├── retrain.py         # MITIGATED retrainer — clones baseline hyperparams, weighted
-    │   ├── train_all.py       # [now] driver; SKIPS any version whose paths.model is declared
-    │   └── spec.py
+    ├── training/             # VERSION LAYER — the worker runs inside env-vX, the driver does not
+    │   ├── retrain.py         # MITIGATED retrainer — clones baseline hyperparams, weighted.
+    │   │                      #  The ONLY trainer left. PYTHON 3.5 COMPATIBLE ON PURPOSE (env-v1
+    │   │                      #  is 3.5.6): no f-strings, no future-annotations — which is also
+    │   │                      #  why it cannot import config.py (itself 3.7+) and takes paths as
+    │   │                      #  arguments. Feature columns come from the BASELINE BOOSTER's own
+    │   │                      #  feature_names, never "everything except claim_id" — the export
+    │   │                      #  notebooks write the TARGET into the matrix.
+    │   ├── retrain_all.py     # [now] its config-aware driver, in the ANALYSIS env: resolves
+    │   │                      #  model/processed_inputs/corrected/mitigated by KIND and launches
+    │   │                      #  each version's interpreter. Same split as score_all -> predict.
+    │   └── spec.py            # (train.py + train_all.py DELETED 2026-08-19 — BASELINE training
+    │                          #  is dead code on real data: all three versions declare
+    │                          #  paths.model, so the baseline is each version's own production
+    │                          #  pickle, LOADED not refitted. The driver skipped all three, and
+    │                          #  its --force path wrote over the REAL pickle. Hyperparameters
+    │                          #  survive in config.TRAINING_CONFIG if a refit is ever needed.)
     ├── envs/                 # specs + build notes; the one script here inspects envs, never builds
     │   ├── v1/ · v2/ · v3/    #  v1/requirements.txt records how env-v1 was REALLY built
     │   └── check_installed.py #  audits a pyproject's deps across N venvs at once (repo .venv vs
@@ -122,7 +135,12 @@ repo/
         │   └── reeval/        #  ┘ (see § "Three worlds", and the two @TODOs there)
         └── real/          # gitignored (src/data/real/) — real exports, or the dummy stand-in
             ├── _DUMMY_DATA    #   present ⇒ this tree is fake and disposable; absent ⇒ treat as real
-            ├── logs/
+            ├── logs/          # only v2 has a production log (v1's destroyed, v3 never deployed)
+            │   ├── v2.parquet         # kind `log`       — ONE ROW PER CLAIM, canonical names
+            │   ├── v2_raw.parquet      # `log_raw`      ┐ one row per SCORING EVENT, keyed
+            │   ├── v2_features.parquet # `log_features` │ (ClaimNumber, correlation_id).
+            │   ├── v2_score.parquet    # `log_scores`   │ NOT pre-joined — raw/features keep
+            │   └── v2_targets.parquet  # `log_targets`  ┘ v2's names, score/targets ours.
             ├── inputs/
             ├── detection/
             │   └── shap/      # per-row φ + sidecar meta: <v>_attributions_<split>.parquet / _meta.json
@@ -144,13 +162,13 @@ repo/
 
 > **Legend:** `[now]` = exists on disk today · `[plan]` = target design, not yet created · `[move]` = exists on disk but under the *old* path, pending the reorg above. **The `src/` application code was scaffolded on 2026-07-01 and then deleted the same day** (it was premature); everything under the layer headings is therefore `[plan]` again. The design it describes still stands; only the code is gone.
 
-> **Note — `data/` is data-only; code lives in the layer packages.** Source-first means the synthetic *generator* (`run.py`, `generate/` — which holds the DGP output `csv/` + `parquet/` — and `script/`) and the *staged artefacts* (`logs/`, `inputs/…reeval/`) sit under the **same** `data/synthetic/` node — the generator is what makes this source. The stage dirs (`logs/` + the four `inputs/…reeval/`) mirror exactly under `data/real/` (which has no generator — real data arrives from Allianz). Analysis/pipeline **code never lives in `data/`**: log-ingestion (`ingest.py`), the log→inputs split (`build_inputs.py`), and score-ingestion (`load_scores.py`) live under `scoring/`, and the planned `DataLoader` classes under `loaders/` — keeping `data/` purely for stored artefacts.
+> **Note — `data/` is data-only; code lives in the layer packages.** Source-first means the synthetic *generator* (`run.py`, `generate/` — which holds the DGP output `csv/` + `parquet/` — and `script/`) and the *staged artefacts* (`logs/`, `inputs/…reeval/`) sit under the **same** `data/synthetic/` node — the generator is what makes this source. The stage dirs (`logs/` + the four `inputs/…reeval/`) mirror exactly under `data/real/` (which has no generator — real data arrives from Allianz). Analysis/pipeline **code never lives in `data/`**: score-ingestion (`load_scores.py`) and the per-version scoring/attribution workers live under `scoring/` (log-ingestion and the log→inputs split are gone — `ingest.py` and `build_inputs.py`, absorbed into the export notebooks), and the planned `DataLoader` classes under `loaders/` — keeping `data/` purely for stored artefacts.
 
 > **Note — synthetic tests read ONLY `data/synthetic/generate/` (added 2026-07-06; ~~superseded 2026-07-14~~).** ⚠️ **The restrictive half of this note is retired — see § "Three worlds" and § "The one invariant" below.** Notebooks may now use **anything** under `src/data/synthetic/`, including `generate.*`. What survives from the original note, and is still true: the `logs/` · `inputs/` · `detection/` · `mitigation/` · `reeval/` subtrees are **not a dataset anyone analyses** — they are a synthetic **dry-run of the real-data pipeline**, materialised only to pin down and validate the application wiring (source→stage layout; ingest/build/score/retrain) **before** any real Allianz resource is connected. Once real data arrives it flows through the identical `data/real/{logs,inputs,detection,mitigation,reeval}/` tree. Treat them as scaffolding for the real-data integration.
 
 > **Note — log ingestion is the one name-translation point (added 2026-07-06; ~~manifest.json~~ → config, and the translation extended to COLUMNS, 2026-07-31).** Each model application emits its production log under whatever name IT chose, with whatever column names IT chose. `scoring/ingest.py` is the SINGLE place that translates both into ours: it reads `config.path("log_source", v)`, renames the columns via `schema.to_canonical`, checks the required ones survived (`schema.require`, which names the offending config entry when one did not), and writes `config.path("log", v)`. Everything downstream reads only the canonical log. `logs/manifest.json` is retired — the source path is now `paths.log_source` in config, so the file name and the column names are edited in the same one place.
 
-> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/{ingest,build_inputs,predict}.py`, `score_all.py`, `load_scores.py`); the **training I/O** (`training/train.py` = baseline trainer, `training/retrain.py` = mitigated retrainer, `train_all.py`); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
+> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/predict.py`, `score_all.py`, `load_scores.py`; `ingest.py` and `build_inputs.py` were here then, deleted 2026-08-09 / 2026-08-19); the **training I/O** (`training/retrain.py` = mitigated retrainer; the baseline trainer `train.py` and its `train_all.py` driver were here then, both deleted 2026-08-19); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
 
 > **Per-version features, built through each version's own repo (both sources).** Each version is scored on its own `inputs/features_<v>.parquet`, produced by **that version's repo preprocessing** — the `preprocessing/v{1,2,3}.py` adapters run each repo's feature builder. This is now **identical for synthetic and real** (decided 2026-07-03): synthetic is only a temporary stand-in, so it goes through the *same* external-repo path, not a special shared recipe. The single difference is where the raw claims come from — synthetic **generates** them (`data/synthetic/` DGP), real **receives** them from Allianz. Because v1/v2/v3 preprocessing genuinely diverges (`V2/V3FeatureBuilder`; `problem.md` §2.5 #10/#11), `features_<v>` files differ across versions on **both** sources. See `DESIGN.md` § "Per-version feature matrices". **This invariant is load-bearing and must be kept** — see § "What synthetic cannot rehearse" below.
 
@@ -217,14 +235,31 @@ config.column("v2", "date")            # -> "ReportedDate"   (v1: "lossdate", v3
 | | kinds | resolution |
 |---|---|---|
 | `READ_KINDS` | `model` · `preprocessor` · `log_source` · `processed_inputs` · `raw_dataset` | already exist in the real repo → **declared** per version in `VERSIONS[v]["paths"]` |
-| `WRITE_KINDS` | `scores` · `attributions` · `corrected` · `mitigated` · `reeval_scores` | this project produces them → **`FALLBACK`** template under our own tree |
+| `WRITE_KINDS` | `log` · `log_raw` · `log_features` · `log_scores` · `log_targets` · `targets` · `scores` · `attributions` · `corrected` · `mitigated` · `reeval_scores` | this project produces them → **`FALLBACK`** template under our own tree |
 
 **A declared path always beats the template, for every kind.** That is the whole point: a kind moves
 from "we generate it" to "the real repo already has it" by filling in one line of config, with no
 code change anywhere. `paths.model` is the live example — leave it blank and we score a baseline pkl
-we retrained ourselves; fill it in and we score that version's real production pickle. **v1 must take
-the second route** (its training data was destroyed, so it can only ever be loaded), while v2/v3 could
-go either way — the config expresses both without branching.
+we retrained ourselves; fill it in and we score that version's real production pickle. All three
+versions declare it today, so the baseline is always the measured pickle, **loaded and never
+refitted** — which is why the baseline trainer was deleted (2026-08-19). ⚠️ Corrected 2026-08-19:
+v1's *training* data is NOT lost — `inputs_transformed.pkl` survives on the `Z:` drive
+(user-confirmed) and 01_export_v1 exports it, so v1 supports the mitigation dataset and
+`retrain.py` like the others. What was destroyed is v1's production **log**, which is a different
+artefact (`paths.log_source = None`).
+
+**Which columns of the matrix are model inputs comes from the REGISTRY, never from config**
+*(unified 2026-08-20)*. `processed_inputs` is not feature-only — every version's export carries the
+target beside the inputs, and v3's also carries its own saved predictions — so
+`df.drop(columns=["claim_id"])` is a bug wherever it appears. The answer is
+`features/registry/<v>.json`, written by `features/extract_features.py` **inside each version env**
+off that version's own pickles: `raw_features` (what the preprocessor expects) and `model_features`
+(what the booster consumes). `config.registry_path(v)` resolves the path; config never stores the
+names, because a copy would be a second source of truth free to drift from the pickles — the
+failure mode `01_export_v2.ipynb` documents for its pasted `MODEL_FEATURES`. Consumers try the open
+booster first and the registry second: `training/retrain.py::select_features` (fed by
+`retrain_all.py --features-json`) and `notebook/real/00_SHAP.ipynb` §2 are the two implementations,
+and both refuse rather than guess when neither route answers.
 
 **Columns are translated once, at ingest.** `VERSIONS[v]["columns"]` maps our canonical name →
 that version's real name (`config.rename_map(v)` hands back the `df.rename` dict). Downstream code
@@ -296,6 +331,69 @@ sources". Config unifies names; it must never flatten semantics.
 `python src/config.py` reports remaining placeholders; `--paths` and `--columns` print the full
 resolved mapping.
 
+### The v2 production log is FOUR artefacts (2026-08-19, revised 2026-08-20)
+
+`notebook/real/01_export_v2_logs.ipynb` reads the live log through the v2 repo's own
+`lvanalytics/evaluation_helpers.py` (inside env-v2 — the frame is bound to that stack).
+
+**`v2_logs` is not one kind of data.** What `eh` hands back is the raw claim frame joined to the
+transformed matrix — on `ClaimNumber` + `correlation_id`, `suffix="_transformed"` — with the
+prediction columns alongside. Exported as a single file, nothing in it separates a raw value from
+what the model actually consumed, so the export **splits it by column**. Two traps it avoids:
+
+* **The suffix is not the test.** `_transformed` lands only on *colliding* names, so a transformed
+  column with no raw namesake arrives bare. The judge is `param.py`'s `MODEL_FEATURES`: for each
+  fitted feature `f`, `f_transformed` is the transformed column if it exists (and bare `f` is then
+  the raw one), otherwise bare `f` is. `log_features` writes them back under the model's own
+  names — SHAP, the registry and `feature_overlap.json` all key on those.
+* **`ClaimNumber` alone is not a key.** One claim can be scored more than once, so
+  `correlation_id` is part of the row identity and every piece carries both keys.
+
+| kind | file | grain | columns |
+|---|---|---|---|
+| `log_raw` | `logs/v2_raw.parquet` | scoring event | keys + every column that is neither a model feature nor a prediction, v2's own names |
+| `log_features` | `logs/v2_features.parquet` | scoring event | both keys + `param.py` `MODEL_FEATURES` in fit order (that order is only knowable inside env-v2, so the file carries it) |
+| `log_scores` | `logs/v2_score.parquet` | scoring event | both keys + `score` · `decision` (canonical) |
+| `log_targets` | `logs/v2_targets.parquet` | scoring event | both keys + `date` · `observed` (canonical; `observed` is the v3 extract's `Fttl`) |
+| `log` | `logs/v2.parquet` | **claim** | `claim_id · date · score · decision · observed` |
+
+All four carry the same key pair — `claim_id` (canonical) + `correlation_id` (its own name; there
+is no canonical name for a scoring event) — so they always rejoin the same way. Only the VALUE
+columns differ: `log_scores` / `log_targets` use canonical names (`schema.SCORE`, `DECISION`,
+`DATE`, `OBSERVED`), while `log_raw` / `log_features` keep v2's own, because a feature name IS
+the measurement.
+
+Only `log` is collapsed to one row per claim — that is the shape
+`loaders.load("v2").log` and `threshold.read_off` require. Collapsing needs a rule for which
+scoring event *is* the claim's decision; the notebook's `EVENT_PICK` makes that an explicit,
+recorded choice and **raises rather than defaulting** when a claim has more than one event.
+The four event-grain pieces are the same row set cut by column, so they rejoin on both keys exactly.
+
+**Why the log's score column is `score`, not `model_v2_score`.** The `scores` kind carries a
+version-tagged name because `loaders.scores_wide()` merges every version's scores into one frame on
+`claim_id` — untagged, that merge would collide into `score_x`/`score_y`. A log is one version's own
+record, is never merged with another version's log (there are no others), and is read by
+`threshold.apply(..., score_col=schema.SCORE)`, which expects the canonical name. `make_dummy_real.py` renames in the same direction on purpose. If a log ever
+needs a version tag, rename on read: `d.log.rename(columns={schema.SCORE: d.score_col})`.
+
+**Neither kind is a SPLIT kind.** train/val/test is a property of model *training*, not of
+production serving: the log spans the serving history and most of it postdates training. So
+`config.path("log_features", "v2")` takes no `split=`, and `"log"` must never be added to
+`config.SPLITS` — that would pull production rows into `ALL_SPLITS` pooling alongside training rows.
+The log's natural partition is the **regime** (`DECISION_RULES["v2"]["regimes"]`, five of them),
+computed from `date` on read, not baked into filenames.
+
+**`observed` does not come from the log.** The live log carries no outcome column; the label is
+joined in from the v3 extract's `Fttl` on claim number (left join — the log's row count is
+preserved). Rows outside the extract's window (2023-06 → 2026-05) therefore have `observed = null`,
+which means *not observed*, never 0.
+
+**`decision` must be the log's own fast-track flag.** Reconstructing it as `score >= τ` is wrong:
+v2's τ moved four times, so a single cutoff mislabels four of the five regimes. If the flag turns
+out to be absent, a regime-aware reconstruction via `threshold.apply` is the fallback and must be
+recorded as reconstructed — the divergence between the rule and what was actually actioned is part
+of what the analysis is looking for.
+
 ### The local dummy tree (added 2026-08-18)
 
 `src/data/real/` is gitignored and holds one of two things, depending on the machine:
@@ -311,6 +409,12 @@ with deliberate mass **above** each cutoff and in the **boundary band** just bel
 detector, the RDD window, `03_02`'s corrector and `02_error_inheritance`'s band all have rows to
 work on. v1 and v2 share a claim-id pool (v2's window sits inside v1's production era) while v3
 does not, which is the real join structure.
+
+For v2 it also writes the `log_features` matrix beside the log, pooled off the split matrices —
+on the real tree those rows are production rows, not the training splits, and the dummy owes the
+chain only the shape. It fakes none of `log_raw` / `log_scores` / `log_targets`: they carry v2's own raw column
+names and the `correlation_id` event key, which the generator does not know, and nothing
+downstream reads them yet.
 
 Two things it does not fake, on purpose: **v1's and v3's production logs** (destroyed / never
 deployed — the single hardest constraint the project works under), and the **model pickles**
@@ -454,9 +558,8 @@ first on real data.
 **Why τ_mit must be tuned inside `retrain.py`, and not in the analysis layer.** Tuning needs an
 out-of-sample **validation slice**; scoring the whole corrected set and tuning on *that* is in-sample,
 gives optimistic precision, lands τ too low, and silently over-scraps. Only the trainer knows the
-split. Moreover the split and the tuning rule should be **the version repo's own** (dynamic import,
-exactly as `train.py` already does for `V{N}FeatureBuilder`) — `threshold.tune` is the *fallback* when
-a repo exposes neither. This extends the existing **re-evaluation invariant** ("reuse the baseline's
+split. Moreover the split and the tuning rule should be **the version repo's own**, imported dynamically
+from that repo — `threshold.tune` is the *fallback* when a repo exposes neither. This extends the existing **re-evaluation invariant** ("reuse the baseline's
 fitted `prep` verbatim; only the label may differ") to the split and the cutoff rule.
 
 > **@TODO** `train.py` / `retrain.py` currently make **no validation split at all** and tune **no τ**.
@@ -538,10 +641,15 @@ Scoring and analysis are decoupled — they never share a process. See `DESIGN.m
 ```
 [ Data preparation — run once, upstream of scoring ]
 
-  ingest.py        config.path("log_source", v)     → config.path("log", v)         (columns renamed to ours)
-  build_inputs.py  canonical log                    → config.path("targets", v)
-  train_all.py     features_<v> + production target → config.path("model", v)       (BASELINE, each in env-v)
-                              │  (SKIPPED where paths.model is declared — that version's real pickle is used)
+  01_export_v<k>.ipynb   Z: raw + transformed pkl   → raw_dataset / processed_inputs / targets /
+                         (inside env-v<k>)            scores, ONE FILE PER SPLIT — the sole
+                                                      producer of all four (2026-08-18)
+  01_export_v2_logs.ipynb  the live v2 log           → log_raw / log_features / log_scores /
+                         (one frame, split by column)   log_targets (event grain)
+                                                      + log (claim grain). Only v2 has a log.
+  (no baseline-training step at all: all three versions declare paths.model, so the BASELINE is
+   each version's own production pickle, loaded — never refitted. Both trainers that produced one
+   were deleted 2026-08-19; retrain.py clones its hyperparameters off that pickle.)
                               ▼
 [ Scoring — run once per version, each in its OWN env ]
 
@@ -579,10 +687,9 @@ Analysis env   SFPDetector(baseline_scores vs mitigated_scores) → SFP metric d
 
 | Component | Runs in | Notes |
 |---|---|---|
-| `training/train.py` baseline v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; fits prep+model FRESH on the production label → `models/…/baseline/v<k>.pkl` |
 | `predict.py` scoring v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; isolated process; writes `detection/*_scores.parquet` |
 | `training/retrain.py` re-train v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; re-evaluation step; reuses baseline prep, fits weighted on corrected labels → `models/…/mitigated/v<k>.pkl` |
-| `ingest.py`, `build_inputs.py`, pipeline, detector, mitigator, `load_scores.py` | analysis env (`.venv`) | `uv add`/`uv sync` → `pyproject.toml` + `uv.lock`; reads precomputed parquet, no model dependency |
+| pipeline, detector, mitigator, `load_scores.py`, the `*_all.py` drivers | analysis env (`.venv`) | `uv add`/`uv sync` → `pyproject.toml` + `uv.lock`; reads precomputed parquet, no model dependency |
 
 > **Two environment tiers.** The analysis `.venv` is one evolving env managed by `uv add` (`pyproject.toml` + `uv.lock`). The per-version scoring envs (`env-v1`/`env-v2`/`env-v3`, under `src/envs/`) are frozen, independently pinned, and managed separately — never folded into the analysis `pyproject.toml`. See `ENV_MANAGEMENT.md`.
 
@@ -591,9 +698,9 @@ Analysis env   SFPDetector(baseline_scores vs mitigated_scores) → SFP metric d
 When a new version (e.g., v4) arrives with different dependencies:
 
 1. Create `src/envs/v4/` with its spec (`requirements.txt`, or `pyproject.toml` + `uv.lock`) and build the env (`uv sync` in that dir, or `uv venv` + `uv pip install -r`)
-2. Add a `"v4"` entry to `config.VERSIONS` + `VERSION_LABELS` (its `paths`, its `columns` mapping), then `python src/scoring/ingest.py` (→ canonical log) and `python src/scoring/build_inputs.py` (→ `inputs/targets_v4.parquet`)
-3. Either declare `paths.model` (v4 ships its own production pickle — nothing to train) or run `python src/training/train_all.py --versions v4`
+2. Add a `"v4"` entry to `config.VERSIONS` + `VERSION_LABELS` (its `paths`, its `columns` mapping) and its `SPLITS`, then write `notebook/real/01_export_v4.ipynb` (the pattern of `01_export_v{1,2,3}`) to emit `raw_dataset` / `processed_inputs` / `targets` / `scores`, one file per split
+3. Declare `paths.model` — v4's own production pickle is the baseline, loaded not refitted. (If v4 ever ships none, a baseline trainer has to be written back; `config.TRAINING_CONFIG` records each version's training call.)
 4. Nothing. `score_all.py` loops `config.VERSION_LABELS`, so registering v4 in config already added it
 5. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis
 
-No new class required. `ingest.py`, `build_inputs.py`, `train.py`, `predict.py`, `retrain.py`, and `load_scores.py` are all version-agnostic and run unchanged — the active env plus the CLI args (`--model`, `--features`, `--labels`, `--version`) decide which version is trained, scored, or retrained.
+No new class required. `predict.py`, `attribute.py`, `retrain.py` and `load_scores.py` are all version-agnostic and run unchanged — the active env plus the CLI args (`--model`, `--features`, `--labels`, `--version`) decide which version is trained, scored, or retrained.
