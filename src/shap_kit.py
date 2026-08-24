@@ -617,24 +617,37 @@ def explanation(att: Attribution, feature_names=None):
 
 
 @contextlib.contextmanager
-def _colorbar_needs_ax():
-    """Give shap's ax-less ``pl.colorbar(m, ...)`` the Axes that matplotlib >= 3.6 insists on.
+def _shap_plot_compat():
+    """Let an old shap draw on a modern matplotlib. Two independent defects in shap 0.40.
 
-    shap 0.40 draws the beeswarm colour legend as ``pl.colorbar(m, ticks=[0, 1], aspect=1000)``
-    (``shap/plots/_beeswarm.py:364``) with a bare ``ScalarMappable`` — it has no ``.axes``, and no
-    ``ax=`` is passed. Up to matplotlib 3.5 that silently stole space from ``gca()``; 3.6 turned it
-    into ``ValueError: Unable to determine Axes to steal space for Colorbar``, which is what killed
-    §6b of ``notebook/real/00_SHAP.ipynb`` on env-v2.
+    **1. The beeswarm colour legend.** shap draws it as ``pl.colorbar(m, ticks=[0, 1],
+    aspect=1000)`` (``shap/plots/_beeswarm.py:364``) with a bare ``ScalarMappable`` — no ``.axes``,
+    no ``ax=``. Up to matplotlib 3.5 that silently stole space from ``gca()``; 3.6 turned it into
+    ``ValueError: Unable to determine Axes to steal space for Colorbar``. Injecting
+    ``ax=plt.gca()`` restores exactly the pre-3.6 behaviour, so the figure is the figure shap
+    always drew — unlike ``color_bar=False``, which would compile but drop the legend that makes
+    the colour axis readable. Only that one line needs it: the rest of shap's colorbar block
+    (``set_ticklabels`` / ``set_label`` / ``tick_params`` / ``set_alpha`` / ``outline``) still
+    exists in current matplotlib, and ``draw_all`` is already commented out upstream. A mappable
+    that *does* carry an Axes is left alone, so this is a no-op for every other caller.
 
-    Injecting ``ax=plt.gca()`` restores exactly the pre-3.6 behaviour, so the figure is the figure
-    shap always drew — unlike ``color_bar=False``, which would compile but drop the legend that
-    makes a beeswarm's colour axis readable. Only line 364 needs this: the rest of shap's colorbar
-    block (``set_ticklabels`` / ``set_label`` / ``tick_params`` / ``set_alpha`` / ``outline``) still
-    exists in current matplotlib, and ``draw_all`` is already commented out upstream.
-
-    A mappable that *does* carry an Axes (anything from ``ax.scatter``) is left alone, so this is a
-    no-op for every other caller — including on env-v1/v2 matplotlibs that never needed it.
+    **2. ``plt`` is undefined in the waterfall.** ``shap/plots/_waterfall.py`` imports pyplot as
+    ``pl`` (line 4) but then calls ``plt.ioff()`` (line 43) and ``return plt.gcf()`` (line 297) —
+    an upstream ``NameError``, on the ``show=False`` branch specifically, which is the branch
+    ``native_plot`` needs to get the figure back. It fires on every matplotlib, so it is not a
+    version-compatibility problem at all; matplotlib just happened to fail first. Binding the name
+    on the module is what the author meant, since ``plt`` and ``pl`` are the same module (later
+    shap releases renamed the import). Checked across all of ``shap/plots/`` in 0.40:
+    ``_waterfall.py`` is the only module with the bug, but the loop is written generically because
+    giving a module an unused ``plt`` attribute costs nothing.
     """
+    for name, mod in list(sys.modules.items()):
+        if name.startswith("shap.plots") and mod is not None and not hasattr(mod, "plt"):
+            try:
+                mod.plt = plt
+            except Exception:                     # C extension or frozen module — nothing to fix
+                pass
+
     original = plt.colorbar
 
     def with_ax(mappable=None, cax=None, ax=None, **kw):
@@ -656,7 +669,7 @@ def native_plot(kind: str, expl, show: bool = False, **kwargs):
     plotting function here takes `show=False`, and we then grab plt.gcf(). Without that the figure
     is closed before it can be saved, which is the usual reason a shap plot "does not save".
 
-    The `_colorbar_needs_ax` wrapper is what lets an old shap draw on a new matplotlib — see its
+    The `_shap_plot_compat` wrapper is what lets an old shap draw on a modern stack — see its
     docstring. It belongs here rather than in the notebook because this is the seam every version's
     kernel already goes through; §6b calls this function and nothing else.
     """
@@ -667,7 +680,7 @@ def native_plot(kind: str, expl, show: bool = False, **kwargs):
     if fn is None:
         raise AttributeError(
             "shap.plots has no %r in shap %s" % (kind, shap_capability()["version"]))
-    with _colorbar_needs_ax():
+    with _shap_plot_compat():
         fn(expl, show=show, **kwargs)
     return plt.gcf()
 
