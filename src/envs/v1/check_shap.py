@@ -159,7 +159,26 @@ def main():
     print("\n== data ==")
     print("  model    {}".format(a.model))
     print("  features {}".format(features_path))
-    est = sk.load_estimator(a.model)
+    try:
+        est = sk.load_estimator(a.model)
+    except Exception as exc:
+        print("  FAILED to load the model: {}: {}".format(type(exc).__name__, exc))
+        try:
+            fh = open(a.model, "rb")
+            try:
+                head = fh.read(16)
+            finally:
+                fh.close()
+            print("  first 16 bytes: {!r}  (size {} bytes)".format(
+                head, os.path.getsize(a.model)))
+            print("  b'\\x80\\x02'/b'\\x80\\x03'/b'\\x80\\x04' = a pickle this env can read;")
+            print("  b'\\x80\\x05' = protocol 5, which Python 3.5 CANNOT read (max is 4);")
+            print("  b'PK\\x03\\x04' = zip, b'\\x1f\\x8b' = gzip, b'version https://' = an")
+            print("  unfetched git-lfs pointer, all-zero = a truncated or placeholder copy.")
+        except Exception:
+            pass
+        return 6
+
     X = build_matrix(est, features_path, a.rows, a.seed)
     background = X.sample(n=min(a.background, len(X)), random_state=a.seed + 1)
     print("  explaining {} rows x {} features, background {} rows".format(
