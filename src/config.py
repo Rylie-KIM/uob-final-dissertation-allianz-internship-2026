@@ -201,7 +201,12 @@ FALLBACK: dict[str, str | None] = {
     "raw_dataset":      "src/data/{source}/inputs/raw_{v}.parquet",   # the export notebooks'
                                                                       #   frozen snapshot
     "scores":        "src/data/{source}/detection/{v}_scores.parquet",
-    "attributions":  "src/data/{source}/detection/shap/{v}_attributions.parquet",
+    "attributions":  "src/data/{source}/detection/shap/{v}/{v}_attributions.parquet",
+                     # the one kind that multiplies: splits x backends x (parquet + _meta.json),
+                     # so it gets a per-version DIRECTORY rather than a flat {v}_ prefix. The
+                     # prefix is kept inside it too — attribute_all.py and 00_SHAP.ipynb build
+                     # sibling names off path.stem, and a file copied out of the tree should
+                     # still say which model it explains.
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
     "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
