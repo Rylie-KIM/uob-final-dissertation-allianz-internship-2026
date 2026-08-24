@@ -33,6 +33,7 @@ Every plot function returns a matplotlib Figure — save it with `figstyle.save(
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import warnings
@@ -323,7 +324,7 @@ class Attribution(object):
         return list(self.mean_abs.head(n).index)
 
     def frame(self, id_values=None, id_col: str = "claim_id") -> pd.DataFrame:
-        """phi as a tidy DataFrame — what gets written to detection/shap/<v>_attributions.parquet."""
+        """phi as a tidy DataFrame — what gets written to detection/shap/<v>/<v>_attributions.parquet."""
         out = pd.DataFrame(self.phi, columns=self.features, index=self.X.index)
         if id_values is not None:
             out.insert(0, id_col, np.asarray(id_values))
@@ -346,6 +347,7 @@ def compute(est, X: pd.DataFrame, background=None, backend: str = "auto") -> Att
     """
     X = align(X, est)
 
+    # auto refers to trying shap >> then, navtive fall back 
     if backend in ("auto", "shap"):
         try:
             return _via_shap(est, X, background)
@@ -614,12 +616,49 @@ def explanation(att: Attribution, feature_names=None):
     )
 
 
+@contextlib.contextmanager
+def _colorbar_needs_ax():
+    """Give shap's ax-less ``pl.colorbar(m, ...)`` the Axes that matplotlib >= 3.6 insists on.
+
+    shap 0.40 draws the beeswarm colour legend as ``pl.colorbar(m, ticks=[0, 1], aspect=1000)``
+    (``shap/plots/_beeswarm.py:364``) with a bare ``ScalarMappable`` — it has no ``.axes``, and no
+    ``ax=`` is passed. Up to matplotlib 3.5 that silently stole space from ``gca()``; 3.6 turned it
+    into ``ValueError: Unable to determine Axes to steal space for Colorbar``, which is what killed
+    §6b of ``notebook/real/00_SHAP.ipynb`` on env-v2.
+
+    Injecting ``ax=plt.gca()`` restores exactly the pre-3.6 behaviour, so the figure is the figure
+    shap always drew — unlike ``color_bar=False``, which would compile but drop the legend that
+    makes a beeswarm's colour axis readable. Only line 364 needs this: the rest of shap's colorbar
+    block (``set_ticklabels`` / ``set_label`` / ``tick_params`` / ``set_alpha`` / ``outline``) still
+    exists in current matplotlib, and ``draw_all`` is already commented out upstream.
+
+    A mappable that *does* carry an Axes (anything from ``ax.scatter``) is left alone, so this is a
+    no-op for every other caller — including on env-v1/v2 matplotlibs that never needed it.
+    """
+    original = plt.colorbar
+
+    def with_ax(mappable=None, cax=None, ax=None, **kw):
+        if cax is None and ax is None and getattr(mappable, "axes", None) is None:
+            ax = plt.gca()
+        return original(mappable, cax=cax, ax=ax, **kw)
+
+    plt.colorbar = with_ax
+    try:
+        yield
+    finally:
+        plt.colorbar = original
+
+
 def native_plot(kind: str, expl, show: bool = False, **kwargs):
     """Call one of shap.plots.* and hand BACK the figure, so figstyle.save can take it.
 
     shap draws onto the current figure and calls plt.show() itself unless told not to; every
     plotting function here takes `show=False`, and we then grab plt.gcf(). Without that the figure
     is closed before it can be saved, which is the usual reason a shap plot "does not save".
+
+    The `_colorbar_needs_ax` wrapper is what lets an old shap draw on a new matplotlib — see its
+    docstring. It belongs here rather than in the notebook because this is the seam every version's
+    kernel already goes through; §6b calls this function and nothing else.
     """
     import matplotlib.pyplot as plt
     import shap
@@ -628,7 +667,8 @@ def native_plot(kind: str, expl, show: bool = False, **kwargs):
     if fn is None:
         raise AttributeError(
             "shap.plots has no %r in shap %s" % (kind, shap_capability()["version"]))
-    fn(expl, show=show, **kwargs)
+    with _colorbar_needs_ax():
+        fn(expl, show=show, **kwargs)
     return plt.gcf()
 
 
