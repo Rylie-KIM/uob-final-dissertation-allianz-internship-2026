@@ -381,12 +381,36 @@ def compute(est, X):
                        note="xgboost {}".format(xgb.__version__))
 
 
-def check_additivity(att, est, tol=1e-3):
+def model_margin(est, X):
+    """The model's RAW margin for X -- the quantity `sum(phi) + base` must reproduce.
+
+    NOT `est.predict(X, output_margin=True)`. xgboost's sklearn wrapper does not honour
+    output_margin before 0.81 (fixed upstream there; shap refuses model_output != "raw" on
+    < 0.81 for exactly this reason), and env-v1 is pinned at 0.72 -- it returns PROBABILITIES
+    instead, so every additivity check fails by the logit-vs-probability difference, a gap of
+    order 5-10 that is identical for every backend because the reference, not the attribution,
+    is wrong.
+
+    Ask the booster directly; fall back to logit(predict_proba), which is exact for
+    binary:logistic. `ntree_limit` follows the estimator so early stopping cannot make the
+    predicted margin cover a different tree set than the attribution summed.
+    """
     try:
-        margin = est.predict(att.X, output_margin=True)
-    except TypeError:
-        proba = est.predict_proba(att.X)[:, 1]
-        margin = np.log(np.clip(proba, 1e-12, 1 - 1e-12) / np.clip(1 - proba, 1e-12, 1))
+        import xgboost as xgb
+        booster = est.get_booster()
+        dmatrix = xgb.DMatrix(X, feature_names=list(X.columns))
+        limit = getattr(est, "best_ntree_limit", 0) or 0
+        margin = booster.predict(dmatrix, output_margin=True, ntree_limit=limit)
+        return np.asarray(margin).ravel()
+    except Exception:
+        proba = est.predict_proba(X)
+        proba = np.asarray(proba)
+        proba = proba[:, -1] if proba.ndim > 1 else proba
+        return np.log(np.clip(proba, 1e-12, 1 - 1e-12) / np.clip(1 - proba, 1e-12, 1))
+
+
+def check_additivity(att, est, tol=1e-3):
+    margin = model_margin(est, att.X)
     gap = float(np.max(np.abs(att.margin - np.asarray(margin).ravel())))
     verdict = "OK" if gap < tol else "*** MISMATCH ***"
     print("  additivity: max |sum(phi) + base - margin| = {:.2e}  {}".format(gap, verdict))
