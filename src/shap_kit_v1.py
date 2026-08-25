@@ -369,8 +369,49 @@ class Attribution(object):
                            self.backend, self.perturbation, self.note)
 
 
-def compute(est, X):
-    X = align(X, est)
+def has_shap():
+    """The installed `shap` version, or None. env-v1 can run without it, at a cost."""
+    try:
+        import shap
+    except Exception:
+        return None
+    return getattr(shap, "__version__", "?")
+
+
+def _via_shap(est, X, background):
+    """TreeSHAP through the `shap` package. background=None => tree_path_dependent.
+
+    This is the route v2/v3 take in 00_SHAP.ipynb, so using it here too makes v1's sidecar meta
+    say backend="shap" like theirs -- concentration.require_comparable compares that field and
+    refuses a run whose versions disagree. The booster route below is the fallback, not the
+    equal alternative.
+    """
+    import shap
+    if background is None:
+        expl = shap.TreeExplainer(est)
+    else:
+        try:
+            expl = shap.TreeExplainer(est, background, feature_perturbation="interventional")
+        except TypeError:                      # shap <= 0.29 spelled it differently
+            expl = shap.TreeExplainer(est, background, feature_dependence="independent")
+
+    values = expl.shap_values(X)
+    if isinstance(values, list):               # one array per class on some versions
+        values = values[-1]
+    values = np.asarray(values)
+    if values.ndim == 3:
+        values = values[:, :, -1]
+
+    base = expl.expected_value
+    base = float(np.asarray(base).ravel()[-1]) if np.ndim(base) else float(base)
+    return Attribution(values, np.full(len(X), base), X, "shap",
+                       "tree_path_dependent" if background is None else "interventional",
+                       note="shap {}".format(shap.__version__))
+
+
+def _via_booster(est, X):
+    """xgboost's own pred_contribs. Exact TreeSHAP, but tree_path_dependent ONLY -- there is no
+    background to intervene with, which is why an interventional request cannot come here."""
     import xgboost as xgb
     booster = est.get_booster()
     dmatrix = xgb.DMatrix(X, feature_names=list(X.columns))
@@ -379,6 +420,31 @@ def compute(est, X):
         contribs = contribs[:, -1, :]
     return Attribution(contribs[:, :-1], contribs[:, -1], X, "native", "tree_path_dependent",
                        note="xgboost {}".format(xgb.__version__))
+
+
+def compute(est, X, background=None, backend="auto"):
+    """Per-row TreeSHAP for `X`.
+
+    background : a reference sample => INTERVENTIONAL. None => tree_path_dependent, each tree's
+                 own cover as the reference.
+    backend    : "auto" prefers `shap` and falls back to the booster; "shap" and "native" force
+                 one. An interventional request can never be served by "native" -- it raises
+                 instead of quietly returning path-dependent numbers under an interventional
+                 label, which is the one failure that survives every downstream check.
+    """
+    X = align(X, est)
+    if backend not in ("auto", "shap", "native"):
+        raise ValueError("backend must be auto|shap|native, not {!r}".format(backend))
+
+    if backend == "native" or (backend == "auto" and has_shap() is None):
+        if background is not None:
+            raise RuntimeError(
+                "interventional attribution needs the `shap` package, which the booster route "
+                "cannot substitute for. Install it in THIS env (see src/envs/v1/requirements.txt "
+                "-- shap==0.35.0 is the last cp35 wheel) and verify with "
+                "src/envs/v1/check_shap.py, or ask for background=None.")
+        return _via_booster(est, X)
+    return _via_shap(est, X, background)
 
 
 def model_margin(est, X):
