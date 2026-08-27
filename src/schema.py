@@ -15,7 +15,7 @@ treatment, outcome, segmenter — and nothing else. In causal terms:
     OBSERVED   the OUTCOME as recorded — contaminated by construction, never a ground truth
     MOBILITY   the segmenting covariate v1's decision rule keys on
 
-FEATURE columns are NOT canonicalised and must never be added here. Their raw column names are the
+FEATURE columns are NOT canonicalised and must never be added here. Their encoded feature names are the
 measurement itself — collapsing v1's 55 `make_*` against v2's 41 would change the dissertation's
 central concentration statistic. Cross-version feature correspondence is governed separately, by
 the hand-confirmed mapping in features/feature_overlap.json (built by features/check_overlap.py

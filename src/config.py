@@ -56,7 +56,7 @@ VERSION_LABELS = ("v1", "v2", "v3")
 # What ACTUALLY exists per version — read off the real training code, 2026-08-08:
 #
 #                     v1                          v2                          v3
-#   model             outputs/fasstacker_xgb.pkl  outputs/model.pkl           outputs/p146_model.pkl
+#   model             outputs/fasttracker_xgb.pkl  outputs/model.pkl           outputs/p146_model.pkl
 #   preproc           outputs/fttl_pipeline.pkl   outputs/pipeline.pkl        outputs/p146_pipeline.pkl
 #   raw_dataset       Z: inputs.pkl               Z: Data/clean_dataset.pkl   Z: (exists — 2026-08-10)
 #   processed_inputs  Z: inputs_transformed.pkl   Z: Data/*_transf_{ts}.pkl   Z: (exists — 2026-08-10)
@@ -279,9 +279,9 @@ VERSIONS: dict[str, dict] = {
         # would point the analysis .venv at a version-bound pandas pickle it cannot open.
         "paths": {
             # As transcribed from the training script. VERIFY the spelling against
-            # `dir outputs` before first use ("fasstacker" vs "fasttracker") — a typo just
+            # `dir outputs` before first use ("fasttracker" vs "fasttracker") — a typo just
             # fails loudly with FileNotFoundError, so this is safe to try as-is.
-            "model": "outputs/fasstacker_xgb.pkl",
+            "model": "outputs/fasttracker_xgb.pkl",
             "preprocessor": "outputs/fttl_pipeline.pkl",
             # Production log destroyed — None for good. The surviving train-time scored file
             # is a different thing — its Z: path lives in 01_export_v1's SOURCES cell.

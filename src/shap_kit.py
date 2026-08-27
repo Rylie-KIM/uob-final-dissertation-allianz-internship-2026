@@ -237,7 +237,7 @@ def describe_features(X: pd.DataFrame) -> pd.DataFrame:
     """Per-column profile: type, cardinality, missingness, spread, and its one-hot family.
 
     The family is the prefix before the last underscore — a heuristic for grouping `make_FORD`,
-    `make_BMW`, … It is for READING the table only. Never aggregate SHAP by it: the the model's own raw column names
+    `make_BMW`, … It is for READING the table only. Never aggregate SHAP by it: the encoded feature names
     are the measurement; cross-version correspondence lives ONLY in the hand-confirmed mapping
     (features/check_overlap.py -> features/feature_overlap.json).
     """
