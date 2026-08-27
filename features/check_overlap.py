@@ -18,6 +18,21 @@ string-based matching, so this script no longer matches anything — it only:
           ...
         }
 
+  5. writes features/feature_overlap_report.json — the same mapping counted per version
+     SUBSET, which is what the analysis actually restricts on. Two different questions live
+     here and they are kept apart on purpose:
+
+       "subsets"            AT LEAST these versions. `v2+v3` therefore includes rows that
+                            also map v1. This is the one that matches a comparison basis:
+                            restricting a v2-vs-v3 comparison has no reason to drop a feature
+                            merely because v1 happens to have it too.
+       "exact_combinations" EXACTLY these versions and no others — how the sheet's rows
+                            partition. Use it to see the shape of the mapping, never to size
+                            a comparison.
+
+     Both carry the mapped INDICES (the sheet's own numbering, so a row is findable again in
+     the Excel) and each version's names, plus a `n` count.
+
 Sheet layout (columns A..F): A index, B v3 name | C index, D v2 name | E index, F v1 name.
 The same integer index across the three column-pairs links the same underlying feature; an
 index absent from a version's columns means that version has no counterpart.
@@ -26,6 +41,7 @@ Run in the analysis .venv (needs pandas + openpyxl):
 
     python features/check_overlap.py
     python features/check_overlap.py --excel features/common_features_260804.xlsx --sheet ALL_SORTED
+    python features/check_overlap.py --from-json      # rebuild ONLY the report, no Excel needed
 
 If validation problems are found, nothing is written unless --force is given — a wrong name in
 the mapping silently corrupts every cross-version SHAP share downstream, with nothing to catch it.
@@ -34,6 +50,7 @@ the mapping silently corrupts every cross-version SHAP share downstream, with no
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 from pathlib import Path
 
@@ -50,6 +67,7 @@ LAYOUT: dict[str, tuple[int, int]] = {"v3": (0, 1), "v2": (2, 3), "v1": (4, 5)}
 DEFAULT_EXCEL = HERE / "common_features_260804.xlsx"
 DEFAULT_SHEET = "ALL_SORTED"
 DEFAULT_OUT = HERE / "feature_overlap.json"
+DEFAULT_REPORT = HERE / "feature_overlap_report.json"
 
 
 def clean_name(cell) -> str | None:
@@ -175,6 +193,88 @@ def validate_against_registry(mapping: dict[int, dict[str, str]]):
     return notes, problems
 
 
+def subsets_of(versions: tuple[str, ...]):
+    """Every version subset of size >= 2, widest first. A single version is not an overlap."""
+    return [combo
+            for size in range(len(versions), 1, -1)
+            for combo in itertools.combinations(versions, size)]
+
+
+def build_report(mapping: dict[int, dict[str, str]], excel: Path, sheet: str) -> dict:
+    """Per-subset overlap counts and indices — see the docstring for what the two views mean.
+
+    Counted off `mapping`, i.e. the sheet as read, NOT off the written JSON: single-version rows
+    are excluded from the written file but still belong in `version_unique` here, which is where
+    a slipped sheet row shows up first.
+
+    The counts are an UPPER BOUND on what any analysis can use. 00_shap_attribution.ipynb
+    additionally drops a mapped name that is absent from the attributions actually on disk, so
+    its basis can be smaller than `n` here — never larger. A gap between the two means a stale
+    mapping or the wrong feature matrix.
+    """
+    report = {
+        "source": {"excel": str(excel), "sheet": sheet},
+        "versions": list(VERSIONS),
+        "n_mapped_rows": len(mapping),
+        "subsets": {},
+        "exact_combinations": {},
+        "version_unique": {},
+    }
+
+    for combo in subsets_of(VERSIONS):
+        key = "+".join(combo)
+        at_least = sorted(i for i, names in mapping.items()
+                          if all(v in names for v in combo))
+        exact = sorted(i for i in at_least if len(mapping[i]) == len(combo))
+        report["subsets"][key] = {
+            "versions": list(combo),
+            "n": len(at_least),
+            "indices": at_least,
+            "names": {v: [mapping[i][v] for i in at_least] for v in combo},
+        }
+        report["exact_combinations"][key] = {"n": len(exact), "indices": exact}
+
+    for v in VERSIONS:
+        only = sorted(i for i, names in mapping.items() if list(names) == [v])
+        report["version_unique"][v] = {
+            "n": len(only),
+            "indices": only,
+            "names": [mapping[i][v] for i in only],
+        }
+
+    # The headline the analysis needs in one line: the widest subset is not always the most
+    # useful one. An intersection is a MIN, so a version that shares little starves the pair
+    # that shares a lot — and the SFP argument rests on the v2->v3 pair, not on all three.
+    widest = "+".join(VERSIONS)
+    report["largest_subset"] = max(report["subsets"],
+                                   key=lambda k: (report["subsets"][k]["n"], k.count("+")))
+    report["all_versions_subset"] = widest
+    report["pairs_wider_than_all_versions"] = sorted(
+        k for k, d in report["subsets"].items()
+        if k != widest and d["n"] > report["subsets"].get(widest, {}).get("n", 0))
+    return report
+
+
+def print_report(report: dict) -> None:
+    print("\noverlap per version subset (AT LEAST these versions):")
+    for key, d in report["subsets"].items():
+        exact = report["exact_combinations"][key]["n"]
+        print(f"  {key:<10} {d['n']:>4} mapped   ({exact} of them map ONLY these)")
+    uniq = {v: d["n"] for v, d in report["version_unique"].items() if d["n"]}
+    if uniq:
+        print("  version-unique rows (not an overlap, excluded from feature_overlap.json): "
+              + ", ".join(f"{v}={n}" for v, n in uniq.items()))
+    if report["pairs_wider_than_all_versions"]:
+        print(f"\n  ⚠ wider than the all-versions subset: "
+              + ", ".join(f"{k} ({report['subsets'][k]['n']})"
+                          for k in report["pairs_wider_than_all_versions"])
+              + f" vs {report['all_versions_subset']} "
+                f"({report['subsets'][report['all_versions_subset']]['n']}).\n"
+                "    Restricting every comparison to the all-versions set would drop features "
+                "the pair DOES share.\n    Report the pair the claim rests on, on its own basis, "
+                "and name the basis beside the number.")
+
+
 def summarise(mapping: dict[int, dict[str, str]]) -> None:
     combos: dict[str, int] = {}
     for names in mapping.values():
@@ -197,9 +297,31 @@ def main() -> None:
     p.add_argument("--excel", default=str(DEFAULT_EXCEL))
     p.add_argument("--sheet", default=DEFAULT_SHEET)
     p.add_argument("--out", default=str(DEFAULT_OUT))
+    p.add_argument("--report", default=str(DEFAULT_REPORT),
+                   help="per-subset overlap counts and indices")
+    p.add_argument("--from-json", action="store_true",
+                   help="rebuild ONLY the report from an existing --out, without the Excel. "
+                        "The report is derived, so this cannot invent anything the mapping "
+                        "does not already say — but it also cannot re-run the registry typo "
+                        "check. `version_unique` reflects whatever the JSON holds: this "
+                        "script's own main() excludes single-version rows, so it comes back "
+                        "empty for a file it wrote — a non-empty one means the JSON came from "
+                        "somewhere else.")
     p.add_argument("--force", action="store_true",
                    help="write the JSON even if validation problems were found")
     a = p.parse_args()
+
+    if a.from_json:
+        src = Path(a.out)
+        if not src.exists():
+            raise SystemExit(f"{src} not found — build it from the Excel first.")
+        mapping = {int(k): row for k, row in json.loads(src.read_text(encoding="utf-8")).items()}
+        report = build_report(mapping, src, "(rebuilt from JSON — no Excel read)")
+        print_report(report)
+        Path(a.report).write_text(json.dumps(report, indent=2, ensure_ascii=False),
+                                  encoding="utf-8")
+        print(f"\nwrote {a.report}  (report only; {src.name} untouched)")
+        return
 
     excel = Path(a.excel)
     if not excel.exists():
@@ -227,6 +349,9 @@ def main() -> None:
 
     summarise(mapping)
 
+    report = build_report(mapping, excel, a.sheet)
+    print_report(report)
+
     if problems:
         print(f"\n{len(problems)} problem(s):")
         for prob in problems:
@@ -244,6 +369,13 @@ def main() -> None:
                if len(mapping[idx]) > 1}       # single-version rows: warned above, not written
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nwrote {out}  ({len(payload)} entries)")
+
+    # Written together, always. A report that can disagree with the mapping beside it is worse
+    # than no report — and the report is the file the write-up quotes counts from.
+    report["n_entries_written"] = len(payload)
+    report_path = Path(a.report)
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"wrote {report_path}  ({len(report['subsets'])} subsets)")
 
 
 if __name__ == "__main__":
