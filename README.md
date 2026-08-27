@@ -1178,7 +1178,7 @@ On **real** data we do not choose — the repos did whatever they did (typically
 ### Model artefacts and reproduction — clone & run, not re-implement (updated 2026-07-01)
 
 > **✅ CORRECTED 2026-08-08 (read off the training code):** the preprocessing and the model are
-> **two separate pickles**, in every version — `fttl_pipeline.pkl` + `fasstacker_xgb.pkl` (v1),
+> **two separate pickles**, in every version — `fttl_pipeline.pkl` + `fasttracker_xgb.pkl` (v1),
 > `pipeline.pkl` + `model.pkl` (v2), `p146_pipeline.pkl` + `p146_model.pkl` (v3), all under the
 > repo's `./outputs/`. The 2026-07-01 "one combined Pipeline pickle" description below is wrong on
 > that point. Everything else in this section stands: preprocessing still lives only inside a
@@ -1254,7 +1254,7 @@ Z:/P10_…/inputs.pkl                                    # raw extract (pandas p
   → features = param.MODEL_FEATURES + NOTROADWORTHY + DAMAGE_FEATURES + ADMIN_FEATURES
   → claims_pipe.fit(train)          → ./outputs/fttl_pipeline.pkl        # fitted on TRAIN only
   → transform all four splits       → Z:/…/inputs_transformed.pkl        # ONE appended file
-  → trainXGB(…)                     → ./outputs/fasstacker_xgb.pkl       # eval_set=[(X_test,y_test)]
+  → trainXGB(…)                     → ./outputs/fasttracker_xgb.pkl       # eval_set=[(X_test,y_test)]
   → predict_proba on all splits     → Z:/…/predictions.pkl               # [claimnumber, predictions]
   → per-split roc_auc printed
 ```
@@ -1263,7 +1263,7 @@ Z:/P10_…/inputs.pkl                                    # raw extract (pandas p
   joinable back to claims.
 - The transformed file appends train+test+val1+val2 **in that order** with no split column — split
   membership must be reconstructed from `lossdate` against the boundaries above.
-- Spelling of `fasstacker_xgb.pkl` is as transcribed; verify against `dir outputs` (a typo fails
+- Spelling of `fasttracker_xgb.pkl` is as transcribed; verify against `dir outputs` (a typo fails
   loudly with FileNotFoundError, so trying it as-is is safe).
 
 ## v2 — pre-cleaned `Z:` extract, tubular pipeline, timestamped split files
@@ -1556,3 +1556,20 @@ uv remove polars
 Each command updates `pyproject.toml`, re-resolves `uv.lock`, and installs into `.venv` in one step. Commit both `pyproject.toml` and `uv.lock` so teammates get the identical environment from `uv sync`.
 
 > Further reading: the [uv documentation](https://docs.astral.sh/uv/).
+
+
+
+As discussed in the example on configuring the alpha parameter, reg_alpha determines the strength of the L1 regularization term on the weights in the XGBoost model. It is a regularization parameter that can help prevent overfitting and promote sparsity by encouraging the model to use fewer features. reg_alpha accepts non-negative values, and the default value in XGBoost is 0, which means no L1 regularization is applied.
+
+To recap, the key points when configuring the reg_alpha parameter are:
+
+Valid range: Non-negative values
+Default value: 0
+Impact on model complexity and sparsity:
+Higher values increase the regularization strength, which can lead to sparser models with fewer active features
+Lower values reduce the regularization strength, allowing the model to use more features and potentially capture more complex patterns
+Interaction with other regularization parameters:
+reg_alpha works in conjunction with lambda (L2 regularization) to control model complexity
+Tuning these parameters together can help find the right balance between overfitting and underfitting
+For practical guidance on choosing the right reg_alpha value, refer to the example on configuring the alpha parameter.
+
