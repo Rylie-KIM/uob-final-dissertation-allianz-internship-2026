@@ -35,16 +35,16 @@ step). Passing --model on its own avoids that entirely and loses nothing that is
 
 Names read off v1's own training script:
 
-    outputs/fasstacker_xgb.pkl     the estimator   -> model_features
+    outputs/fasttracker_xgb.pkl     the estimator   -> model_features
     outputs/fttl_pipeline.pkl      the preprocessor -> raw_features
 
-  (verify the spelling against `dir outputs` -- "fasstacker" vs "fasttracker" is transcribed, not
+  (verify the spelling against `dir outputs` -- "fasttracker" vs "fasttracker" is transcribed, not
    confirmed. A typo just fails with FileNotFoundError, so it is safe to try as-is.)
 
 USAGE -- run with env-v1's own interpreter, from the repo root. ONE LINE, so no continuation
 character is involved and it is the same in PowerShell and cmd:
 
-    src\\envs\\v1\\.venv\\python.exe features\\extract_features_v1.py --model model_repos\\real\\<v1-repo>\\outputs\\fasstacker_xgb.pkl
+    src\\envs\\v1\\.venv\\python.exe features\\extract_features_v1.py --model model_repos\\real\\<v1-repo>\\outputs\\fasttracker_xgb.pkl
 
 If you do split it over lines, the continuation character is SHELL-SPECIFIC -- ` in PowerShell,
 ^ in cmd. This repo's SETUP.md is written for PowerShell, where a stray ^ is passed to the script
@@ -52,7 +52,7 @@ as a literal argument and the remaining lines run as separate commands. Backtick
 after it on the line:
 
     src\\envs\\v1\\.venv\\python.exe features\\extract_features_v1.py `
-        --model        model_repos\\real\\<v1-repo>\\outputs\\fasstacker_xgb.pkl `
+        --model        model_repos\\real\\<v1-repo>\\outputs\\fasttracker_xgb.pkl `
        
 
 Writes features/registry/v1.json. Add `--dry-run` to print what it found without writing.

@@ -7,10 +7,14 @@ string-based matching, so this script no longer matches anything — it only:
 
   1. reads the sheet,
   2. cleans the cell noise (wrapping quotes, trailing commas, stray blanks),
-  3. validates every name against features/registry/<v>.json where that registry exists
+  3. restores a name's exact pickle spelling when the sheet and the registry differ by
+     WHITESPACE ONLY (v2 carries two feature names trained with a blank in them — a
+     spreadsheet cannot hold a trailing blank reliably, so it is taken from the registry
+     rather than typed into the sheet; see restore_registry_spelling),
+  4. validates every name against features/registry/<v>.json where that registry exists
      (the registry is extracted from the pickles by extract_features.py, so this is the
       typo check — names are never guessed), and
-  4. writes features/feature_overlap.json:
+  5. writes features/feature_overlap.json:
 
         {
           "1": {"v1": "...", "v2": "...", "v3": "..."},
@@ -18,7 +22,7 @@ string-based matching, so this script no longer matches anything — it only:
           ...
         }
 
-  5. writes features/feature_overlap_report.json — the same mapping counted per version
+  6. writes features/feature_overlap_report.json — the same mapping counted per version
      SUBSET, which is what the analysis actually restricts on. Two different questions live
      here and they are kept apart on purpose:
 
@@ -83,6 +87,12 @@ def clean_name(cell) -> str | None:
         if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
             s = s[1:-1]
     return s or None
+
+
+def ws_key(s: str) -> str:
+    """Whitespace-insensitive key: edges stripped, internal runs collapsed to a single space.
+    A non-breaking space (the usual copy-paste-into-Excel artefact) counts as whitespace."""
+    return " ".join(s.replace("\u00a0", " ").split())
 
 
 def parse_index(cell) -> int | None:
@@ -161,22 +171,70 @@ def read_mapping(excel: Path, sheet: str):
     return mapping, problems, skipped, warnings
 
 
+def load_registry(version: str):
+    """(names, note). `names` is None when the registry cannot be used — `note` says why."""
+    reg_path = REGISTRY / f"{version}.json"
+    if not reg_path.exists():
+        return None, (
+            f"{version}: no registry ({reg_path}) — names UNVERIFIED. Run "
+            f"extract_features.py inside env-{version} to enable the typo check."
+        )
+    known = json.loads(reg_path.read_text(encoding="utf-8")).get("model_features", [])
+    if not known:
+        return None, f"{version}: registry exists but lists no model_features — UNVERIFIED"
+    return known, None
+
+
+def restore_registry_spelling(mapping: dict[int, dict[str, str]]):
+    """Give a mapped name back the pickle's exact spelling when the two differ by WHITESPACE ONLY.
+
+    v2 was trained with two feature names that carry a blank in them (confirmed on the company
+    laptop, 2026-08-27). A spreadsheet cannot carry that blank: Excel renders it invisibly, any
+    later edit silently drops it, and clean_name() strips it along with the real cell noise. So
+    the blank is restored from the registry — the pickle's own feature list — instead of being
+    typed into the sheet, where it could not survive anyway.
+
+    This is NOT fuzzy matching and does not relax the never-guess rule: the two strings must be
+    identical once whitespace is normalised. Anything else is left untouched for
+    validate_against_registry() to report as a problem.
+
+    Assumes no version's registry holds two names that differ from each other by whitespace only
+    (confirmed 2026-08-27 — it does not happen). That assumption is what makes the ws_key lookup
+    a lookup rather than a choice; if it ever stopped holding, this would silently pick one.
+    """
+    notes: list[str] = []
+    for version in VERSIONS:
+        known, _ = load_registry(version)
+        if known is None:
+            continue                          # unverifiable here; the validator says so
+        exact = set(known)
+        by_key = {ws_key(name): name for name in known}
+        for idx in sorted(mapping):
+            name = mapping[idx].get(version)
+            if name is None or name in exact:
+                continue
+            literal = by_key.get(ws_key(name))
+            if literal is not None:
+                mapping[idx][version] = literal
+                notes.append(
+                    f"{version}: index {idx} {name!r} -> {literal!r} "
+                    f"(registry spelling; the two differ by whitespace only)"
+                )
+            # no whitespace-only counterpart: leave it alone — validate_against_registry() reports
+            # it as a name the pickle does not have, which is what it is
+    return notes
+
+
 def validate_against_registry(mapping: dict[int, dict[str, str]]):
     """Every mapped name must exist in that version's pickle-extracted feature list."""
     notes: list[str] = []
     problems: list[str] = []
     for version in VERSIONS:
-        reg_path = REGISTRY / f"{version}.json"
-        if not reg_path.exists():
-            notes.append(
-                f"{version}: no registry ({reg_path}) — names UNVERIFIED. Run "
-                f"extract_features.py inside env-{version} to enable the typo check."
-            )
+        known_list, note = load_registry(version)
+        if known_list is None:
+            notes.append(note)
             continue
-        known = set(json.loads(reg_path.read_text(encoding="utf-8")).get("model_features", []))
-        if not known:
-            notes.append(f"{version}: registry exists but lists no model_features — UNVERIFIED")
-            continue
+        known = set(known_list)
         bad = sorted(
             {names[version] for names in mapping.values() if version in names}
             - known
@@ -331,6 +389,9 @@ def main() -> None:
         )
 
     mapping, problems, skipped, warnings = read_mapping(excel, a.sheet)
+    # Restore the pickle's whitespace before validating, so the validator is not handed a name
+    # the sheet was structurally unable to spell.
+    ws_notes = restore_registry_spelling(mapping)
     notes, reg_problems = validate_against_registry(mapping)
     problems += reg_problems
 
@@ -343,6 +404,12 @@ def main() -> None:
         print(f"\n{len(warnings)} warning(s) — single-version rows, excluded from the JSON:")
         for w in warnings:
             print(f"  ⚠ {w}")
+
+    if ws_notes:
+        print(f"\n{len(ws_notes)} name(s) respelled from the registry (whitespace only) — the "
+              f"written JSON carries the blank, so index columns by the exact string:")
+        for n in ws_notes:
+            print(f"  ~ {n}")
 
     for n in notes:
         print(f"note: {n}")
