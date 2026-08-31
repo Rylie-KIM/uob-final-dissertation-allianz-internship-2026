@@ -46,7 +46,7 @@ ROWS: dict[str, dict[str, int]] = {
     "v3": {"train": 1500, "test": 375, "oot": 480},
 }
 
-# Feature names are the model's own raw column names and DELIBERATELY DIVERGENT across versions — the encoding divergence is a
+# Feature names are each model's own ENCODED feature names and DELIBERATELY DIVERGENT across versions — the encoding divergence is a
 # real finding of the mapping work (v1 carries 55 `make_*` columns, v2 41, and v2's top feature
 # `location_Home` is absent from the other two). A dummy set that used one tidy shared schema
 # would make every overlap and concentration figure look better than it can be.
@@ -249,7 +249,7 @@ def build(version: str, root: pathlib.Path, written: list[pathlib.Path]) -> None
         # the log spans the serving history, most of which postdates training.
         #
         # The other log kinds (`log_raw`, `log_scores`, `log_targets`) get no dummy: they carry
-        # v2's own raw column names and the correlation-id event key, neither of which this
+        # v2's own encoded column names and the correlation-id event key, neither of which this
         # generator knows, and nothing downstream reads them yet — `log` above already gives the
         # chain the shape it needs. Their real counterparts come out of 01_export_v2_logs.ipynb.
         log_feats = pd.concat(
@@ -305,13 +305,25 @@ def _clean(root: pathlib.Path) -> None:
     if not marker.exists():
         raise SystemExit(f"\nno {MARKER} marker in {root} — nothing here is known to be dummy.\n")
     listed = json.loads(marker.read_text(encoding="utf-8")).get("files", [])
+    sidecars = 0
     for rel in listed:
-        (config.ROOT / rel).unlink(missing_ok=True)
+        target = config.ROOT / rel
+        target.unlink(missing_ok=True)
+        # v1_parquet_to_csv.py writes a CSV beside every v1 parquet (env-v1 has no parquet
+        # engine), and those are not in the marker's list because that script also runs on the
+        # real tree, where there is no marker to write into. Left behind, they would sit in a
+        # directory this clean is meant to empty — and the next --force would then find files
+        # with no marker and refuse. So take the sibling with the parquet.
+        csv = target.with_suffix(".csv")
+        if target.suffix == ".parquet" and csv.exists():
+            csv.unlink()
+            sidecars += 1
     marker.unlink()
     for d in sorted((p for p in root.rglob("*") if p.is_dir()), reverse=True):
         if not any(d.iterdir()):
             d.rmdir()
-    print(f"removed {len(listed)} dummy files and the marker")
+    print(f"removed {len(listed)} dummy files"
+          + (f" (+{sidecars} CSV sidecars)" if sidecars else "") + " and the marker")
 
 
 def main() -> None:
