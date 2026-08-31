@@ -1,0 +1,8 @@
+{
+  "_comment": "Translation point: version -> the model application's emitted log (whatever name IT chose). ingest.py copies each into the canonical logs/<version>.parquet that this pipeline expects. On real data, only edit the paths here - no pipeline code changes.",
+  "sources": {
+    "v1": "model_repos/practice/fttl-v1/log_v1.parquet",
+    "v2": "model_repos/practice/fttl-v2/log_v2.parquet",
+    "v3": "model_repos/practice/fttl-v3/log_v3.parquet"
+  }
+}
