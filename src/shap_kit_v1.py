@@ -274,7 +274,7 @@ def model_feature_names(est):
 UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
 
 
-def feature_order(est, columns):
+def feature_order(est, columns, trained=None):
     """Status of `columns` against the booster's trained order -- the meta's `feature_order`.
 
     Same four words as shap_kit.feature_order in the analysis env, so the field means one thing
@@ -285,15 +285,23 @@ def feature_order(est, columns):
     positional placeholder is not evidence that the order is right. An honest "unverified" is
     the correct record in that case.
     """
-    trained = model_feature_names(est)
+    source = ""
+    if trained is None:
+        trained = model_feature_names(est)
+    else:
+        # Pass the list the caller actually ordered X by. 00_SHAP_v1 resolves it from
+        # registry_features() when the booster exposes nothing, and without this the meta would
+        # read "unverified" for a run whose order WAS checked -- against the registry.
+        trained = [str(c) for c in trained]
+        source = " (via registry)"
     cols = [str(c) for c in columns]
     if not trained:
         return UNVERIFIED_ORDER
     if trained == cols:
-        return "exact"
+        return "exact" + source
     if sorted(trained) == sorted(cols):
-        return "reordered"
-    return "set_mismatch"
+        return "reordered" + source
+    return "set_mismatch" + source
 
 
 def align(X, est):

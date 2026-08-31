@@ -217,7 +217,7 @@ def model_feature_names(est) -> list:
 UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
 
 
-def feature_order(est, columns) -> str:
+def feature_order(est, columns, trained=None) -> str:
     """Status of `columns` against the booster's trained order — the meta's `feature_order` field.
 
     ONE VOCABULARY, shared by every producer of an attributions file (this module, shap_kit_v1.py,
@@ -233,13 +233,22 @@ def feature_order(est, columns) -> str:
     cannot tell a checked file from an unchecked one, and the two look identical. SHAP is
     positional underneath, so a wrong order attributes every value to the wrong feature.
     """
-    trained = model_feature_names(est)
+    source = ""
+    if trained is None:
+        trained = model_feature_names(est)
+    else:
+        # The caller resolved the order from somewhere other than the pickle — v1 falls back to
+        # features/registry/v1.json when xgboost 0.72 exposes no names. Recording WHICH source
+        # answered matters: "unverified" would be wrong (the order WAS checked) and a bare
+        # "exact" would hide that the pickle itself never confirmed it.
+        trained = [str(c) for c in trained]
+        source = " (via registry)"
     cols = [str(c) for c in columns]
     if not trained:
         return UNVERIFIED_ORDER
     if trained == cols:
-        return "exact"
-    return "reordered" if sorted(trained) == sorted(cols) else "set_mismatch"
+        return "exact" + source
+    return ("reordered" if sorted(trained) == sorted(cols) else "set_mismatch") + source
 
 
 def align(X: pd.DataFrame, est) -> pd.DataFrame:
