@@ -40,8 +40,12 @@ import warnings
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+except ImportError:                  # a headless caller (scoring/attribute.py) imports this
+    plt = None                       # module for feature_order() alone and never plots. Only
+    LinearSegmentedColormap = None   # the plotting half needs matplotlib; style() says so.
 
 # ── house style, applied defensively ──────────────────────────────────────────────────
 try:
@@ -210,25 +214,50 @@ def model_feature_names(est) -> list:
     return []
 
 
-def align(X: pd.DataFrame, est) -> pd.DataFrame:
-    """Put X into the booster's trained column order, or say exactly what does not match.
+UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
 
-    SHAP is positional underneath, so a silently reordered matrix attributes every value to the
-    wrong feature — a failure with no symptom.
+
+def feature_order(est, columns) -> str:
+    """Status of `columns` against the booster's trained order — the meta's `feature_order` field.
+
+    ONE VOCABULARY, shared by every producer of an attributions file (this module, shap_kit_v1.py,
+    and scoring/attribute.py), so the field means the same thing in every `_meta.json`:
+
+        "exact"         the trained names, in the trained order
+        "reordered"     same set, different order
+        "set_mismatch"  different columns altogether
+        "unverified …"  the estimator exposes no trained names, so nothing can be checked
+
+    Producers differ in what they DO about it — align() below reorders, attribute.py refuses —
+    but they all record the same word. Recording it is the point: without the field a reader
+    cannot tell a checked file from an unchecked one, and the two look identical. SHAP is
+    positional underneath, so a wrong order attributes every value to the wrong feature.
     """
     trained = model_feature_names(est)
+    cols = [str(c) for c in columns]
     if not trained:
+        return UNVERIFIED_ORDER
+    if trained == cols:
+        return "exact"
+    return "reordered" if sorted(trained) == sorted(cols) else "set_mismatch"
+
+
+def align(X: pd.DataFrame, est) -> pd.DataFrame:
+    """Put X into the booster's trained column order, or say exactly what does not match."""
+    status = feature_order(est, X.columns)
+    if status == UNVERIFIED_ORDER:
         print("  the estimator exposes no feature names — column order is UNVERIFIED. "
               "Check it by hand before trusting any per-feature claim.")
         return X
-    have, want = set(X.columns), set(trained)
-    if want - have or have - want:
+    trained = model_feature_names(est)
+    if status == "set_mismatch":
+        have, want = set(X.columns), set(trained)
         raise ValueError(
             "X does not match the model's features.\n"
             f"  in model, not in X : {sorted(want - have)[:12]}\n"
             f"  in X, not in model : {sorted(have - want)[:12]}"
         )
-    if list(X.columns) != trained:
+    if status == "reordered":
         print("  reordered X into the booster's trained column order")
     return X[trained]
 

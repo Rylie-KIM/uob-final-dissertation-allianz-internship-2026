@@ -271,19 +271,45 @@ def model_feature_names(est):
     return []
 
 
-def align(X, est):
+UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
+
+
+def feature_order(est, columns):
+    """Status of `columns` against the booster's trained order -- the meta's `feature_order`.
+
+    Same four words as shap_kit.feature_order in the analysis env, so the field means one thing
+    across v1, v2 and v3 metas: "exact", "reordered", "set_mismatch", "unverified ...".
+
+    v1 reaches "unverified" more easily than the other two, and that is not a defect here: this
+    module's model_feature_names() rejects xgboost 0.72's generic f0/f1/... names, because a
+    positional placeholder is not evidence that the order is right. An honest "unverified" is
+    the correct record in that case.
+    """
     trained = model_feature_names(est)
+    cols = [str(c) for c in columns]
     if not trained:
+        return UNVERIFIED_ORDER
+    if trained == cols:
+        return "exact"
+    if sorted(trained) == sorted(cols):
+        return "reordered"
+    return "set_mismatch"
+
+
+def align(X, est):
+    status = feature_order(est, X.columns)
+    if status == UNVERIFIED_ORDER:
         print("  the estimator exposes no feature names -- column order is UNVERIFIED. "
               "Check it by hand before trusting any per-feature claim.")
         return X
-    have, want = set(X.columns), set(trained)
-    if want - have or have - want:
+    trained = model_feature_names(est)
+    if status == "set_mismatch":
+        have, want = set(X.columns), set(trained)
         raise ValueError(
             "X does not match the model's features.\n"
             "  in model, not in X : {}\n"
             "  in X, not in model : {}".format(sorted(want - have)[:12], sorted(have - want)[:12]))
-    if list(X.columns) != trained:
+    if status == "reordered":
         print("  reordered X into the booster's trained column order")
     return X[trained]
 
