@@ -19,8 +19,13 @@ the verdict travels with the file.
 
 Nothing is recomputed: phi are never read, the CSV/parquet is never opened. Only the JSON.
 
-    <env-v1 python> src\\scoring\\backfill_feature_order_v1.py --model <fasttracker_xgb.pkl>
-    <env-v1 python> src\\scoring\\backfill_feature_order_v1.py --model <...> --dry-run
+env-v1 is a CONDA env (Python 3.5 predates uv), so its interpreter sits directly in the env
+directory -- no `Scripts\\`, unlike env-v2/env-v3:
+
+    src\\envs\\v1\\.venv\\python.exe src\\scoring\\backfill_feature_order_v1.py ^
+        --model model_repos\\real\\<v1-repo>\\outputs\\fasttracker_xgb.pkl --dry-run
+
+Drop --dry-run to write.
 """
 import argparse
 import glob
