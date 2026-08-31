@@ -217,7 +217,7 @@ def model_feature_names(est) -> list:
 UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
 
 
-def feature_order(est, columns, trained=None) -> str:
+def feature_order(est, columns, trained=None, trained_source=None) -> str:
     """Status of `columns` against the booster's trained order — the meta's `feature_order` field.
 
     ONE VOCABULARY, shared by every producer of an attributions file (this module, shap_kit_v1.py,
@@ -242,7 +242,7 @@ def feature_order(est, columns, trained=None) -> str:
         # answered matters: "unverified" would be wrong (the order WAS checked) and a bare
         # "exact" would hide that the pickle itself never confirmed it.
         trained = [str(c) for c in trained]
-        source = " (via registry)"
+        source = f" (via registry: {trained_source or 'unrecorded'})"
     cols = [str(c) for c in columns]
     if not trained:
         return UNVERIFIED_ORDER

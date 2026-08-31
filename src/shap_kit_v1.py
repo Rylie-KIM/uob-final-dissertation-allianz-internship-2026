@@ -111,6 +111,21 @@ def registry_features():
     return trained
 
 
+def registry_features_source():
+    """WHERE the registry's column ORDER came from, or "unrecorded" for a pre-2026-08-31 file.
+
+    extract_features_v1.py writes this as `model_features_source`. It matters because the rungs
+    are not equally strong: "booster.feature_names" IS the fit order, while a preprocessing
+    head's "get_feature_names_out" is only the order that head emitted -- a good inference, not
+    a record. A verdict of "exact (via registry)" is worth different amounts in the two cases.
+    """
+    if not os.path.exists(REGISTRY_PATH):
+        return "unrecorded"
+    with open(REGISTRY_PATH, encoding="utf-8") as fh:
+        registry = json.load(fh)
+    return str(registry.get("model_features_source") or "unrecorded")
+
+
 def style():
     import matplotlib as mpl
     wanted = OrderedDict([
@@ -274,7 +289,7 @@ def model_feature_names(est):
 UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
 
 
-def feature_order(est, columns, trained=None):
+def feature_order(est, columns, trained=None, trained_source=None):
     """Status of `columns` against the booster's trained order -- the meta's `feature_order`.
 
     Same four words as shap_kit.feature_order in the analysis env, so the field means one thing
@@ -293,7 +308,7 @@ def feature_order(est, columns, trained=None):
         # registry_features() when the booster exposes nothing, and without this the meta would
         # read "unverified" for a run whose order WAS checked -- against the registry.
         trained = [str(c) for c in trained]
-        source = " (via registry)"
+        source = " (via registry: {})".format(trained_source or "unrecorded")
     cols = [str(c) for c in columns]
     if not trained:
         return UNVERIFIED_ORDER

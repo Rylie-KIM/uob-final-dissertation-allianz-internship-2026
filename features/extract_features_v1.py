@@ -241,6 +241,11 @@ def main():
         "pipeline_repr": type(prep).__name__ if prep is not None else type(est).__name__,
         "raw_features": raw_features,
         "model_features": model_features,
+        # `model_src` was computed and printed already; it is written now because the ORDER of
+        # model_features is what shap_kit_v1.registry_features() hands to a SHAP run when the
+        # booster exposes no names, and a verdict of "exact (via registry)" is only meaningful
+        # if the registry can say where its order came from.
+        "model_features_source": model_src,
     }
 
     if not model_features:

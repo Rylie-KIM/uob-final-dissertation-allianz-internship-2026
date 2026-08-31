@@ -46,14 +46,27 @@ def _raw_features(pipe) -> list[str]:
     return [str(n) for n in names] if names is not None else []
 
 
-def _model_features(pipe) -> list[str]:
-    """Post-preprocessing column names, tried in order of reliability."""
+def _model_features(pipe) -> tuple[list[str], str]:
+    """Post-preprocessing column names, tried in order of reliability, WITH which rung answered.
+
+    The source is returned, not just printed, because the list's ORDER is what downstream trusts
+    and the three rungs do not mean the same thing:
+
+      get_feature_names_out()   the preprocessing head's OUTPUT order. Equals the fit order only
+                                if the pipeline handed the model exactly that frame — an
+                                inference, not a record. WEAKEST, and it is tried FIRST.
+      booster.feature_names     the fit order itself. Strongest.
+      feature_names_in_         the fit-time input order. Strong.
+
+    Without the label, `feature_order: "exact (via registry)"` in an attribution meta certifies
+    an order against a source nobody can name afterwards.
+    """
     # 1. the preprocessing head can name its own outputs
     if hasattr(pipe, "__getitem__") and hasattr(pipe, "steps") and len(pipe.steps) > 1:
         head = pipe[:-1]
         if hasattr(head, "get_feature_names_out"):
             try:
-                return [str(n) for n in head.get_feature_names_out()]
+                return [str(n) for n in head.get_feature_names_out()], "get_feature_names_out"
             except Exception as exc:  # bespoke transformers often do not implement it
                 print(f"  get_feature_names_out() unavailable on preprocess head: {exc}")
 
@@ -63,13 +76,13 @@ def _model_features(pipe) -> list[str]:
         try:
             names = est.get_booster().feature_names
             if names:
-                return [str(n) for n in names]
+                return [str(n) for n in names], "booster.feature_names"
         except Exception as exc:
             print(f"  booster.feature_names unavailable: {exc}")
     names = getattr(est, "feature_names_in_", None)
     if names is not None:
-        return [str(n) for n in names]
-    return []
+        return [str(n) for n in names], "estimator.feature_names_in_"
+    return [], "not recoverable"
 
 
 def main() -> None:
@@ -90,12 +103,14 @@ def main() -> None:
             raise SystemExit(f"\n{exc}\n")
 
     pipe = joblib.load(model)  # needs that version's repo importable in THIS env
+    model_features, model_src = _model_features(pipe)
     payload = {
         "version": a.version,
         "model_path": str(model),
         "pipeline_repr": type(pipe).__name__,
         "raw_features": _raw_features(pipe),
-        "model_features": _model_features(pipe),
+        "model_features": model_features,
+        "model_features_source": model_src,   # which rung produced the ORDER above
     }
 
     if not payload["model_features"]:
@@ -109,7 +124,7 @@ def main() -> None:
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(
         f"[{a.version}] raw={len(payload['raw_features'])} "
-        f"model={len(payload['model_features'])} -> {out}"
+        f"model={len(payload['model_features'])} (order from {model_src}) -> {out}"
     )
 
 
