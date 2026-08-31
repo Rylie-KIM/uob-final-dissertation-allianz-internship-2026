@@ -1,0 +1,329 @@
+{
+  "source": {
+    "excel": "/Users/yeon/work/uob/uob-final-dissertation-allianz-internship-2026/features/feature_overlap.json",
+    "sheet": "(rebuilt from JSON — no Excel read)"
+  },
+  "versions": [
+    "v1",
+    "v2",
+    "v3"
+  ],
+  "n_mapped_rows": 26,
+  "subsets": {
+    "v1+v2+v3": {
+      "versions": [
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "n": 12,
+      "indices": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "names": {
+        "v1": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "age_of_vehicle",
+          "estimated_repair_cost",
+          "vehicle_value",
+          "airbag_deployed",
+          "damage_severity",
+          "n_damaged_areas"
+        ],
+        "v2": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "AgeOfVehicle",
+          "EstimatedRepairCost",
+          "VehicleValue",
+          "AirbagsDeployed",
+          "DamageSeverity",
+          "NumberOfDamagedAreas"
+        ],
+        "v3": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "AgeOfVehicle_VEH",
+          "EstimatedRepairCost_VEH",
+          "VehicleValue_VEH",
+          "AirbagsDeployed_VEH",
+          "DamageSeverity_VEH",
+          "NumberOfDamagedAreas_VEH"
+        ]
+      }
+    },
+    "v1+v2": {
+      "versions": [
+        "v1",
+        "v2"
+      ],
+      "n": 13,
+      "indices": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "names": {
+        "v1": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "age_of_vehicle",
+          "estimated_repair_cost",
+          "vehicle_value",
+          "airbag_deployed",
+          "damage_severity",
+          "n_damaged_areas",
+          "make_NISSAN"
+        ],
+        "v2": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "AgeOfVehicle",
+          "EstimatedRepairCost",
+          "VehicleValue",
+          "AirbagsDeployed",
+          "DamageSeverity",
+          "NumberOfDamagedAreas",
+          "make_NISSAN"
+        ]
+      }
+    },
+    "v1+v3": {
+      "versions": [
+        "v1",
+        "v3"
+      ],
+      "n": 12,
+      "indices": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "names": {
+        "v1": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "age_of_vehicle",
+          "estimated_repair_cost",
+          "vehicle_value",
+          "airbag_deployed",
+          "damage_severity",
+          "n_damaged_areas"
+        ],
+        "v3": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "AgeOfVehicle_VEH",
+          "EstimatedRepairCost_VEH",
+          "VehicleValue_VEH",
+          "AirbagsDeployed_VEH",
+          "DamageSeverity_VEH",
+          "NumberOfDamagedAreas_VEH"
+        ]
+      }
+    },
+    "v2+v3": {
+      "versions": [
+        "v2",
+        "v3"
+      ],
+      "n": 14,
+      "indices": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        14,
+        15
+      ],
+      "names": {
+        "v2": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "AgeOfVehicle",
+          "EstimatedRepairCost",
+          "VehicleValue",
+          "AirbagsDeployed",
+          "DamageSeverity",
+          "NumberOfDamagedAreas",
+          "Roadworthy",
+          "ExtricationRequired"
+        ],
+        "v3": [
+          "make_FORD",
+          "make_VAUXHALL",
+          "make_BMW",
+          "make_AUDI",
+          "make_VW",
+          "make_OTHER",
+          "AgeOfVehicle_VEH",
+          "EstimatedRepairCost_VEH",
+          "VehicleValue_VEH",
+          "AirbagsDeployed_VEH",
+          "DamageSeverity_VEH",
+          "NumberOfDamagedAreas_VEH",
+          "Roadworthy_VEH",
+          "ExtricationRequired_VEH"
+        ]
+      }
+    }
+  },
+  "exact_combinations": {
+    "v1+v2+v3": {
+      "n": 12,
+      "indices": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    "v1+v2": {
+      "n": 1,
+      "indices": [
+        13
+      ]
+    },
+    "v1+v3": {
+      "n": 0,
+      "indices": []
+    },
+    "v2+v3": {
+      "n": 2,
+      "indices": [
+        14,
+        15
+      ]
+    }
+  },
+  "version_unique": {
+    "v1": {
+      "n": 7,
+      "indices": [
+        16,
+        17,
+        22,
+        23,
+        24,
+        25,
+        26
+      ],
+      "names": [
+        "driveable",
+        "vehicle_mobility_status_code",
+        "make_TOYOTA",
+        "make_MERCEDES",
+        "make_PEUGEOT",
+        "make_RENAULT",
+        "make_KIA"
+      ]
+    },
+    "v2": {
+      "n": 3,
+      "indices": [
+        18,
+        19,
+        20
+      ],
+      "names": [
+        "location_Home",
+        "location_Roadside",
+        "location_Garage"
+      ]
+    },
+    "v3": {
+      "n": 1,
+      "indices": [
+        21
+      ],
+      "names": [
+        "TotalLossPropensity"
+      ]
+    }
+  },
+  "largest_subset": "v2+v3",
+  "all_versions_subset": "v1+v2+v3",
+  "pairs_wider_than_all_versions": [
+    "v1+v2",
+    "v2+v3"
+  ]
+}

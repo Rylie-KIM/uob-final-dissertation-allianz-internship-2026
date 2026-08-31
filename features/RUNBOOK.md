@@ -107,10 +107,10 @@ that half; `model_features` is the load-bearing one.
 Gives both name sets. Add `--dry-run` first to see what it found without writing.
 
 ```powershell
-src\envs\v1\.venv\python.exe features\extract_features_v1.py --model "C:\...\outputs\fasstacker_xgb.pkl" --preprocessor "C:\...\outputs\fttl_pipeline.pkl" --dry-run
+src\envs\v1\.venv\python.exe features\extract_features_v1.py --model "C:\...\outputs\fasttracker_xgb.pkl" --preprocessor "C:\...\outputs\fttl_pipeline.pkl" --dry-run
 ```
 
-Verify the filename against `dir` first — `fasstacker` vs `fasttracker` was transcribed from the
+Verify the filename against `dir` first — `fasttracker` vs `fasttracker` was transcribed from the
 training script, not confirmed. A typo fails immediately with a clear message.
 
 The script tries four loaders in writer-first order (`sklearn.externals.joblib` → `joblib` →
