@@ -54,6 +54,14 @@ import joblib
 import numpy as np
 import pandas as pd
 
+# The ONE repo import this worker makes. It runs inside a version env via subprocess and takes
+# every path on the command line, so it deliberately knows nothing about config — but the
+# feature-order vocabulary has to be identical to the notebooks' or the `feature_order` field
+# means two different things in two files. shap_kit's matplotlib import is optional for exactly
+# this caller.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import shap_kit  # noqa: E402
+
 BASE_COL = "_base_value"   # the additive constant; phi columns + this = the raw margin
 
 
@@ -109,24 +117,20 @@ def _estimator(obj):
 
 
 def _check_feature_order(est, columns: list[str]) -> str:
-    """Column order must match what the booster was trained on — SHAP is positional underneath."""
-    trained = None
-    if hasattr(est, "get_booster"):
-        try:
-            trained = est.get_booster().feature_names
-        except Exception:
-            trained = None
-    if trained is None:
-        trained = getattr(est, "feature_name_", None)          # lightgbm
-    if trained is None:
-        names = getattr(est, "feature_names_in_", None)
-        trained = list(names) if names is not None else None
-    if not trained:
-        return "unverified (the estimator exposes no trained feature names)"
-    trained = [str(c) for c in trained]
-    if trained == columns:
-        return "exact"
-    if sorted(trained) == sorted(columns):
+    """The shared status (shap_kit.feature_order), but REFUSING instead of repairing.
+
+    The notebooks call shap_kit.align(), which reorders a mismatched matrix and carries on. This
+    worker must not: `--features` is a file someone named on the command line, and silently
+    reordering it would hide that the wrong file was passed. So the same two bad statuses become
+    a SystemExit here — no parquet, no meta — while the value written to the meta comes from the
+    same vocabulary as every other producer.
+    """
+    status = shap_kit.feature_order(est, columns)
+    if status in ("exact", shap_kit.UNVERIFIED_ORDER):
+        return status
+
+    trained = shap_kit.model_feature_names(est)
+    if status == "reordered":
         raise SystemExit(
             "--features has the right columns in the WRONG ORDER. SHAP indexes positionally, so "
             "this would attribute every value to the wrong feature. Reorder --features to the "

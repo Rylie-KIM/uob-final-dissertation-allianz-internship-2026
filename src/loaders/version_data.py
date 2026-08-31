@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property
 
 import pandas as pd
@@ -38,17 +38,11 @@ import threshold   # noqa: E402
 def _read(kind: str, version: str, source: str, split: str | None = None) -> pd.DataFrame:
     """Resolve a kind to a path and read it, reporting WHICH config entry to fix on failure.
 
-    ``split`` is passed straight to config.path() and validated there, with one addition:
-    ``config.ALL_SPLITS`` reads every split of this version and concatenates them, adding a
-    ``split`` column. Pooling is never implicit — see VersionData.split.
+    ``split`` is passed straight to config.path() and validated there. One call reads ONE split's
+    file — there is no pooled mode. An analysis that genuinely needs every split concatenates them
+    at its own call site (02_error_inheritance does), so the pooling is visible in the notebook
+    that depends on it rather than hidden behind a split name.
     """
-    if split == config.ALL_SPLITS:
-        parts = []
-        for one in config.SPLITS[version]:
-            part = _read(kind, version, source, one)
-            parts.append(part.assign(split=one))
-        return pd.concat(parts, ignore_index=True)
-
     try:
         path = config.path(kind, version, source, split=split)
     except ValueError as exc:
@@ -70,16 +64,8 @@ def _read(kind: str, version: str, source: str, split: str | None = None) -> pd.
 
 
 def _join(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    """Inner join on claim_id — and on the split marker too when both sides carry one.
-
-    Under split="all" every per-split frame gains a `split` column. Joining on claim_id alone
-    would leave `split_x` / `split_y` and, for a claim that appears in two splits, cross rows
-    that never existed. Joining on both keeps one row per (claim, split).
-    """
-    keys = [schema.CLAIM_ID]
-    if "split" in left.columns and "split" in right.columns:
-        keys.append("split")
-    return left.merge(right, on=keys, how="inner")
+    """Inner join on claim_id. Both sides come from the SAME split, so that is the only key."""
+    return left.merge(right, on=schema.CLAIM_ID, how="inner")
 
 
 @dataclass
@@ -92,24 +78,20 @@ class VersionData:
     default to, and silently picking one would hide a case-mix choice under every number
     downstream. `log` and `raw_dataset` are single artefacts and ignore it.
 
-    Pass ``split=config.ALL_SPLITS`` ("all") to pool every split, which adds a ``split`` column
-    so the pooling stays visible in the frame itself. Use it where an analysis genuinely needs
-    the whole population — cross-version joins like 02_error_inheritance — and say so in the
-    write-up, because v1 splits 4 ways and v2/v3 split 3.
+    One instance means one split. An analysis that needs the whole population pools at its own
+    call site (02_error_inheritance) and says so in the write-up, because v1 splits 4 ways and
+    v2/v3 split 3.
     """
 
     version: str
     source: str = "real"
     split: str | None = None
-    _cache: dict = field(default_factory=dict, repr=False)
 
     def _require_split(self, kind: str) -> str:
         if self.split is None:
             raise ValueError(
                 f"[{self.version}] {kind!r} exists only per split. Load with a split:\n"
-                f"    load({self.version!r}, split=...)   one of {config.SPLITS[self.version]}\n"
-                f"    load({self.version!r}, split={config.ALL_SPLITS!r})  every split pooled, "
-                f"with a `split` column"
+                f"    load({self.version!r}, split=...)   one of {config.SPLITS[self.version]}"
             )
         return self.split
 
@@ -126,7 +108,14 @@ class VersionData:
 
     @cached_property
     def targets(self) -> pd.DataFrame:
-        """claim_id + date + decision + observed, in canonical names (see src/schema.py)."""
+        """claim_id + date + observed, in canonical names (see src/schema.py).
+
+        NO score and NO decision: targets is the label column lifted out of that split's training
+        matrix (v1/v2 `veh_total_loss`, v3 `Fttl` — 01_export_v*.ipynb), so it records what the
+        outcome was, never what the model said or what was done about it. Those two live only in
+        the production `log`, which only v2 has. For a decision on a split, use `.decisions` —
+        it reproduces one from the scores via that version's own rule.
+        """
         return _read("targets", self.version, self.source, self._require_split("targets"))
 
     @cached_property
@@ -163,12 +152,6 @@ class VersionData:
         import json
 
         split = self._require_split("attributions")
-        if split == config.ALL_SPLITS:
-            raise ValueError(
-                f"[{self.version}] each split was attributed in its own run, so there is no one "
-                f"meta for {config.ALL_SPLITS!r}. Compare versions one split at a time — "
-                f"require_comparable() has nothing to check against a pooled frame."
-            )
         path = config.path("attributions", self.version, self.source, split=split)
         meta = path.with_name(path.stem + "_meta.json")
         if not meta.exists():
@@ -227,17 +210,16 @@ def load(version: str, source: str = "real", split: str | None = None) -> Versio
 
     `split` is validated here rather than at first use, so a typo fails on the load() line
     instead of three cells later. Valid names are config.SPLITS[version] — each version's OWN
-    (v1 and v2 invert "test"; only v3 has "oot") — or config.ALL_SPLITS to pool them.
+    (v1 and v2 invert "test"; only v3 has "oot").
     """
     if version not in config.VERSION_LABELS:
         raise KeyError(
             f"unknown version {version!r}; expected one of {config.VERSION_LABELS}. "
             f"(The synthetic a/b arms v2a/v2b/v3a/v3b were retired — v2b had no real counterpart.)"
         )
-    if split is not None and split != config.ALL_SPLITS and split not in config.SPLITS[version]:
+    if split is not None and split not in config.SPLITS[version]:
         raise KeyError(
-            f"unknown split {split!r} for {version}; expected one of {config.SPLITS[version]} "
-            f"or {config.ALL_SPLITS!r}."
+            f"unknown split {split!r} for {version}; expected one of {config.SPLITS[version]}."
         )
     return VersionData(version=version, source=source, split=split)
 
@@ -256,7 +238,7 @@ def _per_version(split, versions: list[str]) -> dict[str, str | None]:
         return {v: split[v] for v in versions}
     return {v: split for v in versions}
 
-
+# split: None | str | dict[str, str] ({"v1": "val2", ... })
 def load_all(versions=None, source: str = "real", split=None) -> dict[str, VersionData]:
     """All versions, keyed by label — for the cross-version comparisons the thesis is about.
 
@@ -267,22 +249,3 @@ def load_all(versions=None, source: str = "real", split=None) -> dict[str, Versi
     chosen = _per_version(split, versions)
     return {v: load(v, source, chosen[v]) for v in versions}
 
-
-def scores_wide(versions=None, source: str = "real", split=None) -> pd.DataFrame:
-    """claim_id + one score column per version, merged. The detector's input shape.
-
-    Outer join: a claim scored by v2 but not v3 keeps a row with NaN, rather than vanishing. An
-    inner join here would silently restrict every cross-version comparison to the intersection.
-
-    The per-version `split` marker is dropped: a claim can sit in v2's train and v3's oot, so
-    there is no one split to attach to a merged row. If which split a claim came from matters,
-    read the versions separately.
-    """
-    versions = list(versions or config.VERSION_LABELS)
-    chosen = _per_version(split, versions)
-    frames = [load(v, source, chosen[v]).scores.drop(columns="split", errors="ignore")
-              for v in versions]
-    out = frames[0]
-    for f in frames[1:]:
-        out = out.merge(f, on=schema.CLAIM_ID, how="outer")
-    return out
