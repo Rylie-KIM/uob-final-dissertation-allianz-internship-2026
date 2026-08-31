@@ -9,10 +9,15 @@ to recover a field that can be derived from the file itself would be hours for n
 model's own trained names answers exactly what `feature_order` reports, without touching a phi
 value. Only the JSON is rewritten; the parquet is never opened.
 
-RUNS INSIDE THAT VERSION'S ENV — it loads the pickle, so it needs the version repo importable:
+RUNS INSIDE THAT VERSION'S ENV — it loads the pickle, so it needs the version repo importable.
+The company laptop is Windows and env-v2/env-v3 are uv venvs, so the interpreter is under
+`Scripts\`, not `bin/` (env-v1 differs again — it is conda; see the _v1 script):
 
-    src/envs/v2/.venv/bin/python src/scoring/backfill_feature_order.py --version v2
-    src/envs/v3/.venv/bin/python src/scoring/backfill_feature_order.py --version v3
+    src\envs\v2\.venv\Scripts\python.exe src\scoring\backfill_feature_order.py --version v2 --dry-run
+    src\envs\v3\.venv\Scripts\python.exe src\scoring\backfill_feature_order.py --version v3 --dry-run
+
+Drop --dry-run to write. `python src/config.py --paths` prints the interpreter it resolved for a
+version if the layout above is not what this machine has (config.python_bin tries all three).
 
     --dry-run          report what would change, write nothing
     --meta <path> ...  specific files instead of every meta under that version's shap directory
