@@ -5,13 +5,13 @@ WHY THIS IS A SEPARATE PROCESS FROM THE NOTEBOOK
 SHAP needs the model *function*, not merely its scores, so it must open the pickle — and a pickle
 only unpickles inside the env it was serialised in (`ModuleNotFoundError` otherwise; see
 src/docs/DESIGN.md § "Attribution ingestion"). So attribution is Version Layer work: this file runs
-under `src/envs/v<k>/.venv/bin/python`, writes `detection/shap/<v>_attributions.parquet`, and the
+under `src/envs/v<k>/.venv/bin/python`, writes `detection/shap/<v>/<v>_attributions.parquet`, and the
 notebook — running in the shared analysis `.venv` — reads that parquet and never touches a model.
 Nothing about the numbers is version-specific once they are on disk.
 
 --features is the POST-preprocessing matrix, exactly as predict.py consumes it (confirmed
 2026-07-31: the real repos pickle the preprocessor separately, and predict_proba takes the
-already-transformed columns). Feature columns therefore keep their **the model's own raw column names**, which is what
+already-transformed columns). Feature columns therefore keep their **encoded feature names**, which is what
 SHAP and the concentration measures must be indexed by. Cross-version correspondence comes only
 from the hand-confirmed mapping (features/check_overlap.py -> features/feature_overlap.json).
 
@@ -36,7 +36,7 @@ USAGE — one call per version, each with THAT version's interpreter:
         --model src/models/real/baseline/v2.pkl \
         --features src/data/real/inputs/features_v2.parquet \
         --version v2 --split test \
-        --out src/data/real/detection/shap/v2_attributions_test.parquet \
+        --out src/data/real/detection/shap/v2/v2_attributions_test.parquet \
         --explain-ids src/data/real/inputs/shap_explain_ids.parquet \
         --background-ids src/data/real/inputs/shap_background_ids.parquet
 
