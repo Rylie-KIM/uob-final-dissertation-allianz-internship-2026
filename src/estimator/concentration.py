@@ -48,7 +48,6 @@ import numpy as np
 import pandas as pd
 
 BASE_COL = "_base_value"     # written by scoring/attribute.py; never a feature
-SPLIT_COL = "split"          # added by loaders when split="all"; a marker, never a feature
 
 
 # ======================================================================================
@@ -59,11 +58,10 @@ SPLIT_COL = "split"          # added by loaders when split="all"; a marker, neve
 def mean_abs(attributions: pd.DataFrame, id_col: str = "claim_id") -> pd.Series:
     """mean|phi| per feature, descending. The input to every measure below.
 
-    Drops the id, base-value and split-marker columns; everything else is a feature and keeps its
-    own encoded feature name. `split` is dropped rather than tolerated: it is a string, so leaving
-    it in would raise deep inside .abs() rather than here, where the reason is obvious.
+    Drops the id and base-value columns; everything else is a feature and keeps its own encoded
+    feature name.
     """
-    drop = [c for c in (id_col, BASE_COL, SPLIT_COL) if c in attributions.columns]
+    drop = [c for c in (id_col, BASE_COL) if c in attributions.columns]
     phi = attributions.drop(columns=drop)
     return phi.abs().mean().sort_values(ascending=False)
 
