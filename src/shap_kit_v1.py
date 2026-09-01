@@ -9,7 +9,6 @@ Same rule as features/extract_features_v1.py: never retrofit v1 support into the
 """
 import json
 import os
-import re
 import sys
 import warnings
 from collections import OrderedDict
@@ -18,6 +17,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
+
+# The trained-column-order vocabulary. It is the ONE thing v1 does NOT keep its own copy of:
+# shap_kit.py (v2/v3) and training/retrain.py import these same four names from the same file,
+# so a `feature_order` verdict means the same thing in a v1 meta as in a v3 one. trained_order.py
+# is written to 3.5 and ASCII precisely so this import is legal here -- see its header.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from trained_order import UNVERIFIED_ORDER, align, feature_order, model_feature_names  # noqa: E402,F401
 
 BLUE, RED, GREY = "#2a78d6", "#e34948", "#898781"
 INK, AXIS = "#0b0b0b", "#c3c2b7"
@@ -272,69 +278,8 @@ def load_estimator(path):
     return obj
 
 
-def model_feature_names(est):
-    getters = (lambda: list(est.get_booster().feature_names),
-               lambda: list(est.feature_name_),
-               lambda: [str(c) for c in est.feature_names_in_])
-    for getter in getters:
-        try:
-            names = getter()
-        except Exception:
-            continue
-        if names and not all(re.match(r"^f\d+$", str(n)) for n in names):
-            return [str(n) for n in names]
-    return []
-
-
-UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
-
-
-def feature_order(est, columns, trained=None, trained_source=None):
-    """Status of `columns` against the booster's trained order -- the meta's `feature_order`.
-
-    Same four words as shap_kit.feature_order in the analysis env, so the field means one thing
-    across v1, v2 and v3 metas: "exact", "reordered", "set_mismatch", "unverified ...".
-
-    v1 reaches "unverified" more easily than the other two, and that is not a defect here: this
-    module's model_feature_names() rejects xgboost 0.72's generic f0/f1/... names, because a
-    positional placeholder is not evidence that the order is right. An honest "unverified" is
-    the correct record in that case.
-    """
-    source = ""
-    if trained is None:
-        trained = model_feature_names(est)
-    else:
-        # Pass the list the caller actually ordered X by. 00_SHAP_v1 resolves it from
-        # registry_features() when the booster exposes nothing, and without this the meta would
-        # read "unverified" for a run whose order WAS checked -- against the registry.
-        trained = [str(c) for c in trained]
-        source = " (via registry: {})".format(trained_source or "unrecorded")
-    cols = [str(c) for c in columns]
-    if not trained:
-        return UNVERIFIED_ORDER
-    if trained == cols:
-        return "exact" + source
-    if sorted(trained) == sorted(cols):
-        return "reordered" + source
-    return "set_mismatch" + source
-
-
-def align(X, est):
-    status = feature_order(est, X.columns)
-    if status == UNVERIFIED_ORDER:
-        print("  the estimator exposes no feature names -- column order is UNVERIFIED. "
-              "Check it by hand before trusting any per-feature claim.")
-        return X
-    trained = model_feature_names(est)
-    if status == "set_mismatch":
-        have, want = set(X.columns), set(trained)
-        raise ValueError(
-            "X does not match the model's features.\n"
-            "  in model, not in X : {}\n"
-            "  in X, not in model : {}".format(sorted(want - have)[:12], sorted(have - want)[:12]))
-    if status == "reordered":
-        print("  reordered X into the booster's trained column order")
-    return X[trained]
+# model_feature_names / feature_order / align / UNVERIFIED_ORDER now live in trained_order.py
+# and are re-exported at the top of this module -- see the import there.
 
 
 def describe_features(X):

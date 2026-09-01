@@ -40,6 +40,19 @@ import warnings
 
 import numpy as np
 import pandas as pd
+
+# The trained-column-order vocabulary, defined ONCE for every env (stdlib only, py3.5-clean) and
+# re-exported here under the names this module has always published, so every `sk.align(...)` /
+# `sk.feature_order(...)` call site keeps working. shap_kit_v1.py and training/retrain.py import
+# the same four names from the same place -- that is the point of the file.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from trained_order import (   # noqa: E402,F401
+    UNVERIFIED_ORDER,
+    align,
+    feature_order,
+    model_feature_names,
+)
+
 try:
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
@@ -200,75 +213,8 @@ def load_estimator(path):
     return obj
 
 
-def model_feature_names(est) -> list:
-    """The column names the booster was trained on, in trained order — or [] if unrecoverable."""
-    for getter in (lambda: list(est.get_booster().feature_names),
-                   lambda: list(est.feature_name_),
-                   lambda: [str(c) for c in est.feature_names_in_]):
-        try:
-            names = getter()
-            if names:
-                return [str(n) for n in names]
-        except Exception:
-            continue
-    return []
-
-
-UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
-
-
-def feature_order(est, columns, trained=None, trained_source=None) -> str:
-    """Status of `columns` against the booster's trained order — the meta's `feature_order` field.
-
-    ONE VOCABULARY, shared by every producer of an attributions file (this module, shap_kit_v1.py,
-    and scoring/attribute.py), so the field means the same thing in every `_meta.json`:
-
-        "exact"         the trained names, in the trained order
-        "reordered"     same set, different order
-        "set_mismatch"  different columns altogether
-        "unverified …"  the estimator exposes no trained names, so nothing can be checked
-
-    Producers differ in what they DO about it — align() below reorders, attribute.py refuses —
-    but they all record the same word. Recording it is the point: without the field a reader
-    cannot tell a checked file from an unchecked one, and the two look identical. SHAP is
-    positional underneath, so a wrong order attributes every value to the wrong feature.
-    """
-    source = ""
-    if trained is None:
-        trained = model_feature_names(est)
-    else:
-        # The caller resolved the order from somewhere other than the pickle — v1 falls back to
-        # features/registry/v1.json when xgboost 0.72 exposes no names. Recording WHICH source
-        # answered matters: "unverified" would be wrong (the order WAS checked) and a bare
-        # "exact" would hide that the pickle itself never confirmed it.
-        trained = [str(c) for c in trained]
-        source = f" (via registry: {trained_source or 'unrecorded'})"
-    cols = [str(c) for c in columns]
-    if not trained:
-        return UNVERIFIED_ORDER
-    if trained == cols:
-        return "exact" + source
-    return ("reordered" if sorted(trained) == sorted(cols) else "set_mismatch") + source
-
-
-def align(X: pd.DataFrame, est) -> pd.DataFrame:
-    """Put X into the booster's trained column order, or say exactly what does not match."""
-    status = feature_order(est, X.columns)
-    if status == UNVERIFIED_ORDER:
-        print("  the estimator exposes no feature names — column order is UNVERIFIED. "
-              "Check it by hand before trusting any per-feature claim.")
-        return X
-    trained = model_feature_names(est)
-    if status == "set_mismatch":
-        have, want = set(X.columns), set(trained)
-        raise ValueError(
-            "X does not match the model's features.\n"
-            f"  in model, not in X : {sorted(want - have)[:12]}\n"
-            f"  in X, not in model : {sorted(have - want)[:12]}"
-        )
-    if status == "reordered":
-        print("  reordered X into the booster's trained column order")
-    return X[trained]
+# model_feature_names / feature_order / align / UNVERIFIED_ORDER now live in trained_order.py
+# and are re-exported at the top of this module -- see the import there.
 
 
 def describe_features(X: pd.DataFrame) -> pd.DataFrame:
