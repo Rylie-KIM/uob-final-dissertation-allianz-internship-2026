@@ -28,6 +28,7 @@ Three things that are easy to get wrong:
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -173,12 +174,6 @@ SPLIT_KINDS = (
     "reeval_scores",      # ┘
 )
 
-# Analysis code may pass this instead of a split name to mean "every split, pooled, with a
-# `split` column recording where each row came from". It is deliberately a WORD, not the
-# default: pooling v1's 4-way split against v3's 3-way one mixes different train/holdout
-# proportions into a cross-version comparison, and that has to be a choice someone typed.
-ALL_SPLITS = "all"
-
 # Fallback location for a kind that is NOT declared for a version. Relative to ROOT.
 # ``{source}`` is "real" or "synthetic"; ``{v}`` is our version label.
 #
@@ -204,9 +199,26 @@ FALLBACK: dict[str, str | None] = {
     "attributions":  "src/data/{source}/detection/shap/{v}/{v}_attributions.parquet",
                      # the one kind that multiplies: splits x backends x (parquet + _meta.json),
                      # so it gets a per-version DIRECTORY rather than a flat {v}_ prefix. The
-                     # prefix is kept inside it too — attribute_all.py and 00_SHAP.ipynb build
-                     # sibling names off path.stem, and a file copied out of the tree should
-                     # still say which model it explains.
+                     # prefix is kept inside it too — attribute_all.py and the SHAP notebooks
+                     # build sibling names off path.stem, and a file copied out of the tree
+                     # should still say which model it explains.
+                     #
+                     # THIS TEMPLATE IS NOT THE WHOLE FILENAME. It spells no split and no
+                     # backend; both are appended downstream, in this order:
+                     #   1. path() appends `_{split}` — the generic SPLIT_KINDS step at the
+                     #      bottom of path(), NOT something visible in the template here.
+                     #   2. the caller appends the backend suffix: attribute_all.py's
+                     #      --out-suffix (see its command()), mirrored by _attributions_path()
+                     #      in notebook/real/00_shap_attribution.ipynb §0.
+                     #   3. the meta is a sibling built off the final stem: + "_meta.json".
+                     # So v3 / split "oot" / backend "native" resolves to
+                     #   src/data/real/detection/shap/v3/v3_attributions_oot_native.parquet
+                     #   src/data/real/detection/shap/v3/v3_attributions_oot_native_meta.json
+                     #
+                     # path()'s key is (kind, version, source, split) — THE BACKEND IS NOT IN
+                     # IT. Two backends on one split collide at the identical path unless a
+                     # suffix is passed, and which SHAP settings produced a file is recoverable
+                     # only from the meta, never from the path.
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
     "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
@@ -451,8 +463,8 @@ def path(kind: str, version: str, source: str = "real", split: str | None = None
         raise ValueError(
             f"{kind!r} exists only per split — the export notebooks write one file per split "
             f"and never an unsplit base file. Pass split=<one of {SPLITS.get(version, ())}>. "
-            f"(To pool every split, analysis code uses loaders.load(..., split={ALL_SPLITS!r}); "
-            f"a single path cannot name more than one file.)"
+            f"(A single path cannot name more than one file; an analysis that needs every split "
+            f"concatenates them at its own call site.)"
         )
     if kind not in SPLIT_KINDS and split is not None:
         raise ValueError(
@@ -612,6 +624,33 @@ def registry_path(version: str) -> pathlib.Path:
     if version not in VERSIONS:
         raise KeyError(f"unknown version {version!r}; expected one of {VERSION_LABELS}")
     return FEATURE_REGISTRY / f"{version}.json"
+
+
+def model_features(version: str) -> list[str]:
+    """The columns that version's BOOSTER consumes, in trained order — read off its registry.
+
+    For the ANALYSIS env, which cannot open a version's pickle (that needs the version repo
+    importable, i.e. env-vX). A process that HAS the estimator open should ask it directly
+    (training/retrain.py -> model_feature_names) and keep this as the fallback; the two agree,
+    because extract_features.py derives the registry from those same pickles.
+
+    Needed because `processed_inputs` is not feature-only: every version's exported matrix carries
+    the target beside the model inputs, and v3's also carries its own saved predictions. So
+    "every column except claim_id" hands the model its own answer as an input.
+    """
+    p = registry_path(version)
+    if not p.is_file():
+        raise SystemExit(
+            f"{p} does not exist, so the feature columns of {version} cannot be determined.\n"
+            f"Build it inside that version's env:\n"
+            f"    {python_bin(version)} features/extract_features.py --version {version}\n")
+    names = json.loads(p.read_text(encoding="utf-8")).get("model_features") or None
+    if names is None:
+        raise SystemExit(
+            f"{p} has no `model_features` — extract_features.py could not recover them from the "
+            f"pickle (it prints a WARNING when that happens). Resolve that first: without the "
+            f"column list a feature cannot be told from the target.")
+    return [str(n) for n in names]
 
 
 def rename_map(version: str) -> dict[str, str]:
