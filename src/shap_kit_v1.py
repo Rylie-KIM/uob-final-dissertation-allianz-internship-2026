@@ -24,6 +24,7 @@ from matplotlib.colors import LinearSegmentedColormap
 # is written to 3.5 and ASCII precisely so this import is legal here -- see its header.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from trained_order import UNVERIFIED_ORDER, align, feature_order, model_feature_names  # noqa: E402,F401
+import model_io                                                                        # noqa: E402
 
 BLUE, RED, GREY = "#2a78d6", "#e34948", "#898781"
 INK, AXIS = "#0b0b0b", "#c3c2b7"
@@ -208,78 +209,14 @@ def env_report(strict=True):
     return info
 
 
-def _load_any(path):
-    """Unpickle v1's artefact with whichever loader the 2018 stack actually used.
-
-    Plain `joblib.load` is NOT enough here. v1 was serialised on sklearn < 0.23, whose
-    `sklearn.externals.joblib` is a DIFFERENT vendored copy — standalone joblib's
-    NumpyUnpickler desyncs on that stream and dies inside pickle.py with `KeyError: <n>`
-    (n = whatever byte it landed on, commonly 0), after passing through numpy_pickle.py.
-    Same ladder, same order as features/extract_features_v1.py, which is the version proven
-    against the real pickle on the company laptop.
-
-    Returns (object, loader_name).
-    """
-    attempts = []
-
-    def _sklearn_joblib():
-        from sklearn.externals import joblib as sk_joblib   # sklearn < 0.23 only
-        return sk_joblib.load(path)
-
-    def _standalone_joblib():
-        import joblib
-        return joblib.load(path)
-
-    def _joblib_compat():
-        # joblib <= 0.9 wrote the arrays as separate .npy sidecars beside the pkl.
-        from joblib.numpy_pickle_compat import load_compatibility
-        return load_compatibility(path)
-
-    def _plain_pickle():
-        import pickle
-        fh = open(path, "rb")
-        try:
-            return pickle.load(fh)
-        finally:
-            fh.close()
-
-    for name, fn in (("sklearn.externals.joblib", _sklearn_joblib),
-                     ("joblib", _standalone_joblib),
-                     ("joblib.load_compatibility", _joblib_compat),
-                     ("pickle", _plain_pickle)):
-        try:
-            obj = fn()
-        except ImportError as exc:
-            attempts.append((name, "not available: {0}".format(exc)))
-        except Exception as exc:
-            attempts.append((name, "{0}: {1}".format(type(exc).__name__, exc)))
-        else:
-            return obj, name
-
-    lines = ["could not unpickle {0} with any loader:".format(path)]
-    for name, why in attempts:
-        lines.append("    {0:<28} {1}".format(name, str(why)[:120]))
-    lines.append("")
-    lines.append("A `KeyError: <n>` from EVERY loader means the pickle stream desynced -- the file")
-    lines.append("was written by a stack this env cannot reproduce. Check `dir` beside the pkl for")
-    lines.append(".npy sidecars (very old joblib), and compare this env's scikit-learn/numpy")
-    lines.append("against the v1 repo's conda_dependencies_local.yml.")
-    raise RuntimeError("\n".join(lines))
-
-
 def load_estimator(path):
-    obj, loader = _load_any(path)
-    print("  loaded with {}".format(loader))
-    if hasattr(obj, "steps"):
-        print("  note: {} is a Pipeline ({}). Explaining the final step; X must be the "
-              "POST-preprocessing matrix.".format(
-                  os.path.basename(str(path)), [n for n, _ in obj.steps]))
-        return obj.steps[-1][1]
-    return obj
+    """v1's pickle, through the shared loader ladder (src/model_io.py).
 
-
-# model_feature_names / feature_order / align / UNVERIFIED_ORDER now live in trained_order.py
-# and are re-exported at the top of this module -- see the import there.
+    The ladder used to be copy-pasted here and in features/extract_features_v1.py, each with
+    a comment saying it had to stay identical to the other. It is one function now.
+    """
+    est, _loader = model_io.load_estimator(path)
+    return est
 
 
 def describe_features(X):
