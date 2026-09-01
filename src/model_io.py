@@ -14,13 +14,15 @@ WHY IT IS ITS OWN FILE. This ladder was copy-pasted in shap_kit_v1.py and
 features/extract_features_v1.py, with a note in each saying it had to stay identical to the
 other -- a rule no code enforced. Same reasoning as trained_order.py: one definition, imported.
 
-Python 3.5 syntax and ASCII-only strings, because env-v1 imports it. Every loader is imported
+Python 3.5 syntax and ASCII-only strings, because env-v1 imports it -- return
+annotations included, which 3.5 has had since 3.0. Every loader is imported
 lazily, inside its own rung, so an env that lacks one is simply a rung that does not apply.
 """
 import os
+from typing import Tuple
 
 
-def load_any(path):
+def load_any(path) -> Tuple[object, str]:
     """Unpickle `path` with whichever loader that stack actually used.
 
     Returns (object, loader_name). Raises RuntimeError, listing what each rung said, when none
@@ -73,7 +75,7 @@ def load_any(path):
     raise RuntimeError("\n".join(lines))
 
 
-def load_estimator(path, quiet=False):
+def load_estimator(path, quiet=False) -> Tuple[object, str]:
     """load_any(), then hand back the thing that owns the trees.
 
     A Pipeline is unwrapped to its final step, with a note: everything downstream (SHAP, scoring)
