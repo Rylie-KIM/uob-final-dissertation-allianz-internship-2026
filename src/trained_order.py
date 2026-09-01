@@ -15,8 +15,12 @@ vocabulary is meant to make impossible. One definition now; the three modules re
 names unchanged, so no call site moved.
 
 TWO CONSTRAINTS, both inherited from env-v1 (Python 3.5.6 on Windows):
-  * Python 3.5 syntax only -- no f-strings, no future annotations, no variable annotations.
-    shap_kit_v1.py imports this and runs there.
+  * Python 3.5 syntax only. Function annotations are FINE (PEP 3107 predates 3.0, and
+    `typing` shipped with 3.5) -- what 3.5 lacks is variable annotations (PEP 526), builtin
+    generics `list[str]` (PEP 585), `X | None` unions (PEP 604), f-strings and
+    `from __future__ import annotations`. shap_kit_v1.py imports this and runs there.
+    `align` returns whatever frame it was given, annotated as a forward-ref string so the
+    stdlib-only rule below survives.
   * ASCII only in anything printed or raised: that console is not UTF-8, and an em dash raises
     UnicodeEncodeError halfway through a run.
 Stdlib only, for the same reason -- it has to import cleanly in all three version envs AND the
@@ -26,14 +30,17 @@ NOT the producer side. features/extract_features.py builds features/registry/<v>
 DIFFERENT ladder (the preprocessing head first, recording which rung answered). That ladder is
 deliberate and verified; it is not unified here.
 """
+import json
+import os
 import re
+from typing import List, Optional, Tuple
 
 # f0, f1, f2, ... -- what old xgboost hands back for a matrix that carried no column names.
 # See model_feature_names for why they are refused rather than believed.
 _PLACEHOLDER = re.compile(r"^f\d+$")
 
 
-def model_feature_names(est):
+def model_feature_names(est) -> List[str]:
     """The columns the estimator was TRAINED on, in trained order -- or [] if unrecoverable.
 
     Three rungs, strongest first: xgboost's booster, lightgbm, sklearn >= 1.0.
@@ -72,7 +79,7 @@ def model_feature_names(est):
 UNVERIFIED_ORDER = "unverified (the estimator exposes no trained feature names)"
 
 
-def feature_order(est, columns, trained=None, trained_source=None):
+def feature_order(est, columns, trained=None, trained_source=None) -> str:
     """Status of `columns` against the trained order -- the meta's `feature_order` field.
 
     ONE VOCABULARY, shared by every producer of an attributions file, so the field means the same
@@ -108,7 +115,7 @@ def feature_order(est, columns, trained=None, trained_source=None):
     return "set_mismatch" + source
 
 
-def align(X, est):
+def align(X, est) -> "pandas.DataFrame":
     """Put X into the trained column order, or say exactly what does not match.
 
     Selection is not this function's job: a frame carrying columns the model never saw is a
@@ -130,3 +137,80 @@ def align(X, est):
     if status == "reordered":
         print("  reordered X into the booster's trained column order")
     return X[trained]
+
+
+def read_registry(path) -> Optional[List[str]]:
+    """features/registry/<v>.json -> its `model_features` list, or None.
+
+    The registry is written by features/extract_features.py INSIDE each version env, off that
+    version's own pickles, so it is the same authority as the booster -- just recorded on disk
+    where a process that cannot open the pickle can still read it.
+    """
+    if not path:
+        return None
+    p = os.path.abspath(path)
+    if not os.path.isfile(p):
+        raise SystemExit(
+            "--features-json {0} does not exist.\n"
+            "Build it inside this version's env:\n"
+            "    <this python> features/extract_features.py --version <v>\n".format(p))
+    fh = open(p)
+    try:
+        payload = json.load(fh)
+    finally:
+        fh.close()
+    names = payload.get("model_features") or None
+    if names is None:
+        raise SystemExit(
+            "{0} has no `model_features` -- extract_features.py could not recover them from the "
+            "pickle (it prints a WARNING when that happens). Resolve that first: without the "
+            "column list a feature cannot be told from the target.".format(p))
+    return [str(n) for n in names]
+
+
+def select_features(X, est, id_col, registry_path=None) -> Tuple[List[str], str]:
+    """The feature columns of X, in the order the model was trained on.
+
+    SHARED by training/retrain.py and scoring/predict.py: fitting and scoring have to pick and
+    order the columns by the same rule, or the mitigated model is scored on a matrix it was never
+    fitted on. Order matters as much as membership -- xgboost matches positionally once names are
+    absent, so a reordered matrix trains a different model while raising nothing.
+
+    TWO ROUTES, one authority. Both answer "which columns did this model consume", and both come
+    from the fitted objects, never from a hand-written list:
+
+      1. the booster the caller already has open (--baseline in retrain, --model in predict);
+      2. features/registry/<v>.json, written by features/extract_features.py inside this env.
+
+    (1) is preferred because it needs nothing else on disk. (2) is the fallback for a booster
+    fitted from a bare numpy array, which carries no names of its own.
+
+    Selection, not just ordering: `processed_inputs` is NOT feature-only. Every version's exported
+    matrix carries the target beside the model inputs, and v3's also carries its own saved
+    predictions, so "everything except claim_id" would hand the model its own answer as an input.
+    Returns (columns, source) -- the caller does X[columns].
+    """
+    trained = model_feature_names(est)
+    source = "booster"
+    if not trained:
+        trained = read_registry(registry_path)
+        source = "registry"
+    if not trained:
+        raise SystemExit(
+            "the estimator exposes no trained feature names, and no --features-json was given,\n"
+            "so the feature columns cannot be determined.\n"
+            "Run the driver instead (training/retrain_all.py, scoring/score_all.py) -- it passes\n"
+            "the registry path from config.\n"
+            "To build the registry:  <this python> features/extract_features.py --version <v>\n")
+
+    missing = [c for c in trained if c not in X.columns]
+    if missing:
+        raise SystemExit(
+            "the feature file is missing {0} column(s) the model was trained on, e.g. {1}.\n"
+            "Point --features at that version's processed_inputs matrix for this "
+            "split.".format(len(missing), missing[:8]))
+    extra = [c for c in X.columns if c not in trained and c != id_col]
+    if extra:
+        print("  set aside {0} non-model column(s): {1}{2}".format(
+            len(extra), extra[:8], " ..." if len(extra) > 8 else ""))
+    return trained, source
