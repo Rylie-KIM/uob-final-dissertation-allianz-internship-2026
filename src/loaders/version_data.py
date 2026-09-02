@@ -54,12 +54,18 @@ def _read(kind: str, version: str, source: str, split: str | None = None) -> pd.
             f"Either declare config.VERSIONS['{version}']['paths']['{kind}'] (if the real repo "
             f"already ships it) or run the step that produces it."
         )
-    # The real repos' data artefacts are pandas pickles (Z: drive), not parquet. A pandas pickle
-    # only reliably opens under the pandas that wrote it — so a .pkl declared here should be read
-    # inside that version's own env (00_SHAP / attribute.py) and re-exported as parquet for this
-    # analysis env. The branch exists so the SAME loader works in both places.
+    # The real repos' data artefacts on Z: are .pkl, not parquet, and `pd.read_pickle` is the
+    # WRONG reader for them: the extension is pandas-shaped but the format is a joblib dump, so
+    # pandas dies with `stack_global requires str` (confirmed on the v2 Z: sources). joblib.load
+    # reads them, and reads a plain pandas pickle too, so it is the only branch here.
+    #
+    # A .pkl still only opens reliably under the pandas that wrote it, so a declared Z: source
+    # belongs to that version's own env (the 01_export_v* notebooks) and reaches this analysis
+    # env re-exported as parquet. The branch exists so the SAME loader works in both places.
     if path.suffix == ".pkl":
-        return pd.read_pickle(path)
+        import joblib   # analysis-env only; the version envs never reach this loader
+
+        return joblib.load(path)
     return pd.read_parquet(path)
 
 
