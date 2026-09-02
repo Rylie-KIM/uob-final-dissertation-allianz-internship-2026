@@ -123,6 +123,12 @@ WRITE_KINDS = (
                       #   (v1/v2 `veh_total_loss`, v3 `Fttl`), so we extract it ourselves.
     "scores",         # baseline scores we recompute       -> detector/
     "attributions",   # per-row SHAP values                 -> estimator/
+    "corrector_targets",  # targets JOINED to the recorded treatment: claim_id + date + observed
+                          #   + decision (+ score where the deciding model's score survives — v3
+                          #   via the v2 serving log; v2's vehicle-status file has decision only,
+                          #   so rarity/pnu cannot run for v2 — thesis tab:scheme-feasibility).
+                          #   Built once by notebook/real/mitigation/03_01_corrector_inputs.ipynb;
+                          #   03_02 (corrector) and 03_05 (re-evaluation) both read it.
     "corrected",      # de-contaminated target              <- mitigator/
     "mitigated",      # model retrained on corrected target
     "reeval_scores",  # scores from the mitigated model     -> reeval/
@@ -169,6 +175,7 @@ SPLIT_KINDS = (
     "targets",            # │
     "scores",             # ┘
     "attributions",       # ┐ derived from one of the above, so they inherit its split
+    "corrector_targets",  # │
     "corrected",          # │
     "mitigated",          # │
     "reeval_scores",      # ┘
@@ -219,6 +226,7 @@ FALLBACK: dict[str, str | None] = {
                      # IT. Two backends on one split collide at the identical path unless a
                      # suffix is passed, and which SHAP settings produced a file is recoverable
                      # only from the meta, never from the path.
+    "corrector_targets": "src/data/{source}/mitigation/inputs/corrector_targets_{v}.parquet",
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
     "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
@@ -598,6 +606,39 @@ def column(version: str, canonical: str) -> str:
             f"config.VERSIONS['{version}']['columns']['{canonical}'] is still a placeholder."
         )
     return value
+
+
+# ======================================================================================
+# 4b. What a VERSION-ENV worker can actually read and write
+# ======================================================================================
+#
+# `path()` above is the ANALYSIS env's truth: every artefact is parquet there, and every reader
+# in loaders/ + the notebooks resolves it that way. One environment cannot honour that.
+
+#: Version envs with no parquet engine. env-v1 is Python 3.5.6, for which neither pyarrow nor
+#: fastparquet exists or can be built -- so v1's scripts read and write CSV, and
+#: `v1_csv_to_parquet.py` converts afterwards in the analysis env. This is a LEGACY carve-out,
+#: not a growing list: v2/v3 have engines, and every version after v3 arrives on Python >= 3.10.
+NO_PARQUET_ENVS = ("v1",)
+
+
+def worker_path(kind: str, version: str, source: str = "real",
+                split: str | None = None) -> pathlib.Path:
+    """The path to hand a script running INSIDE that version's env -- CSV where parquet is not readable.
+
+    Same artefact, same directory, same stem as `path()`; only the extension differs, which is
+    exactly the convention `01_export_v1.ipynb` writes under and `v1_csv_to_parquet.py` converts
+    from (`config.path(...).with_suffix(".csv")`).
+
+    Use it for anything a version-env worker opens or writes (`predict.py --features/--out`);
+    keep `path()` for everything the analysis env reads, since the CSV is converted to that
+    parquet before analysis sees it. A v1 run therefore leaves CSV behind and is not finished
+    until the converter has run.
+    """
+    p = path(kind, version, source, split=split)
+    if version in NO_PARQUET_ENVS and p.suffix == ".parquet":
+        return p.with_suffix(".csv")
+    return p
 
 
 FEATURE_REGISTRY = ROOT / "features" / "registry"
