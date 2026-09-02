@@ -6,5 +6,36 @@ __pycache__/
 
 # Version model repos from external apps. 
 /model_repos/
-/data/real/
-/models/real/ 
+
+# REAL Allianz artefacts. These patterns were anchored at the repo root (/data/real/) but the
+# directories are src/data/real/ and src/models/real/, so NOTHING was ignored — on the company
+# laptop the real exports would have been committable. Corrected 2026-08-18.
+src/data/real/**
+src/models/real/
+
+# ...with ONE exception: the data dictionary. It documents the columns of artefacts that only
+# exist on the company laptop, so it is useless unless it travels there — and it carries no data,
+# only column names and grains. The directory itself must NOT be excluded (git cannot re-include
+# a file under an excluded directory), which is why the rule above ends in `**`.
+!src/data/real/DATA_MODEL.md
+
+# The local dummy stand-in lives at src/data/real/ too and is covered by the rule above. It is
+# not committed on purpose: regenerate it with `python src/data/make_dummy_real.py`, which IS
+# tracked. Committing fake data to the same path the real exports occupy is how the two get
+# confused.
+
+# Feature registries (features/registry/<v>.json). DERIVED per machine, by running
+# features/extract_features.py (v2/v3) or extract_features_v1.py (v1) against that machine's own
+# pickles — so the company laptop's are the real ones and a local file is a shape stand-in. Same
+# reasoning as src/data/real/ above, with one edge that makes it sharper: the sync is one-way
+# (local -> company), so a local stand-in committed here would OVERWRITE the real registry on
+# arrival, and the real one cannot come back. The directory and its README stay tracked.
+features/registry/*.json
+features/registry/_DUMMY_REGISTRY
+# Same for the mapping it validates: feature_overlap.json is BUILT by check_overlap.py from
+# the Excel sheet, which lives only on the company laptop. A local stand-in must not travel.
+features/feature_overlap.json
+
+# Per-version envs (src/envs/v{1,2,3}/.venv). Built per machine — the company laptop's are the
+# real ones, a local one is a path-resolution stand-in.
+src/envs/*/.venv/ 
