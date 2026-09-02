@@ -31,8 +31,9 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-import config  # noqa: E402
-import schema  # noqa: E402
+import config     # noqa: E402
+import schema     # noqa: E402
+import threshold  # noqa: E402
 
 MARKER = "_DUMMY_DATA"          # written into src/data/real/; its presence is the licence to write
 SEED = 20260818
@@ -79,6 +80,17 @@ WINDOWS: dict[str, tuple[str, str]] = {
     "v2": ("2018-01-02", "2020-09-30"),
     "v3": ("2023-06-01", "2026-05-31"),
 }
+
+# ---- the v2 production log's two awkward facts, reproduced on purpose ------------------
+# Both are documented in 01_export_v2_logs.ipynb as things every consumer has to survive, and a
+# dummy without them lets code pass locally and fail on arrival — the one failure mode this whole
+# tree exists to prevent.
+REPEAT_EVENT_FRAC = 0.03    # claims scored MORE THAN ONCE, which is why the log's key is
+                            #   [claim_id, correlation_id] and not claim_id alone
+EXTRACT_COVERAGE = 0.92     # `observed` comes from the v3 extract (`Fttl`), whose window starts
+                            #   later than the log's, so the earliest rows have NO label. Null
+                            #   there means UNOBSERVED, never 0 — never fillna(0).
+N_LOG_RAW_COLS = 6          # abstract stand-ins; see _v2_log_kinds() on why they are not named
 
 
 # ======================================================================================
@@ -188,7 +200,7 @@ def build(version: str, root: pathlib.Path, written: list[pathlib.Path]) -> None
         # `observed` is the CONTAMINATED target, and the contamination is the point: every row
         # above tau is a forced 1 (scrapped, never garage-verified). Below tau it is drawn with a
         # score-dependent rate, which is what an uncontaminated-ish garage outcome looks like.
-        forced = scores >= tau
+        forced = scores > tau                 # STRICT: score == tau goes to garage, not scrap
         observed = np.where(forced, 1, rng.binomial(1, np.clip(scores * 1.4, 0, 0.95)))
 
         # The matrix CARRIES THE TARGET, in every version — user-confirmed 2026-08-19, matching
@@ -227,38 +239,93 @@ def build(version: str, root: pathlib.Path, written: list[pathlib.Path]) -> None
             size=len(raw), p=[0.35, 0.1, 0.05, 0.5])
     _write(raw, config.path("raw_dataset", version, "real"), written)
 
-    # The canonical production log — ONLY v2 has one. v1's was destroyed and v3 never deployed, so
+    # The production log — ONLY v2 has one. v1's was destroyed and v3 never deployed, so
     # generating those two would fake the single hardest constraint the project works under.
     if version == "v2":
-        pooled = pd.concat(
-            [pd.read_parquet(config.path("targets", "v2", "real", split=s))
-             .merge(pd.read_parquet(config.path("scores", "v2", "real", split=s)),
-                    on=schema.CLAIM_ID)
-             for s in config.SPLITS["v2"]],
-            ignore_index=True,
-        ).rename(columns={"model_v2_score": schema.SCORE})
-        pooled[schema.DECISION] = (pooled[schema.SCORE] >= tau).astype(int)
-        _write(pooled[[schema.CLAIM_ID, schema.DATE, schema.SCORE,
-                       schema.DECISION, schema.OBSERVED]],
-               config.path("log", "v2", "real"), written)
+        _v2_log_kinds(rng, written)
 
-        # The log's TRANSFORMED matrix (kind `log_features`) — the model's own feature columns for
-        # the log's rows, no target. Written by 01_export_v2_logs.ipynb from what production
-        # actually scored; here it is pooled off the split matrices instead, because the dummy
-        # only owes the chain a SHAPE. On the real tree these rows are NOT the training splits:
-        # the log spans the serving history, most of which postdates training.
-        #
-        # The other log kinds (`log_raw`, `log_scores`, `log_targets`) get no dummy: they carry
-        # v2's own encoded column names and the correlation-id event key, neither of which this
-        # generator knows, and nothing downstream reads them yet — `log` above already gives the
-        # chain the shape it needs. Their real counterparts come out of 01_export_v2_logs.ipynb.
-        log_feats = pd.concat(
-            [pd.read_parquet(config.path("processed_inputs", "v2", "real", split=s))
-             for s in config.SPLITS["v2"]],
-            ignore_index=True,
-        ).drop(columns=[target_col])
-        log_feats = pooled[[schema.CLAIM_ID]].merge(log_feats, on=schema.CLAIM_ID, how="left")
-        _write(log_feats, config.path("log_features", "v2", "real"), written)
+
+def _v2_log_kinds(rng: np.random.RandomState, written: list[pathlib.Path]) -> None:
+    """The five `log*` artefacts, in the shapes 01_export_v2_logs.ipynb writes.
+
+    FOUR EVENT-GRAIN PIECES + ONE CLAIM-GRAIN LOG. `v2_logs` is one frame carrying raw,
+    transformed and prediction columns together; the notebook splits it BY COLUMN into log_raw /
+    log_features / log_scores / log_targets, all keyed [claim_id, correlation_id], and collapses
+    it to one row per claim for the canonical `log`. This reproduces that structure.
+
+    WHAT IS FAKED, AND WHAT IS NOT. Column NAMES are the one thing this generator cannot invent
+    honestly: log_raw carries v2's own raw claim columns and log_features the model's encoded
+    feature names, and neither is knowable on a laptop that has never opened the v2 repo. They are
+    therefore written as `v2_raw*` / `v2_feat*` — obviously-not-real placeholders, rather than a
+    plausible invention that could be mistaken for the real spelling later. Only the SHAPE is a
+    claim: keys, grain, dtypes, repeat scoring events, and null `observed`.
+
+    Rows are pooled off the training splits so claim ids still rejoin `scores` / `targets`
+    locally. On the real tree they do NOT: the log is the serving history, most of which
+    postdates training. See the notebook's closing note.
+    """
+    EVENT_ID = "correlation_id"          # no canonical name — it goes out under its own
+
+    pooled = pd.concat(
+        [pd.read_parquet(config.path("targets", "v2", "real", split=s))
+         .merge(pd.read_parquet(config.path("scores", "v2", "real", split=s)),
+                on=schema.CLAIM_ID)
+         for s in config.SPLITS["v2"]],
+        ignore_index=True,
+    ).rename(columns={"model_v2_score": schema.SCORE})
+
+    # ---- event grain: a claim can be scored more than once --------------------------------
+    n_repeat = int(len(pooled) * REPEAT_EVENT_FRAC)
+    again = pooled.iloc[rng.choice(len(pooled), size=n_repeat, replace=False)].copy()
+    again[schema.SCORE] = np.clip(
+        again[schema.SCORE] + rng.normal(0, 0.03, n_repeat), 1e-6, 1 - 1e-6)
+    again[schema.DATE] = again[schema.DATE] + pd.to_timedelta(
+        rng.randint(1, 30, n_repeat), unit="D")
+
+    ev = (pd.concat([pooled, again], ignore_index=True)
+            .sort_values([schema.DATE, schema.CLAIM_ID], ignore_index=True))
+    ev[EVENT_ID] = ["%08x%08x" % (a, b) for a, b in
+                    zip(rng.randint(0, 2 ** 31, len(ev)), rng.randint(0, 2 ** 31, len(ev)))]
+
+    # decision comes from threshold.apply, not a hand-written comparison: the rule is `score > tau`
+    # STRICTLY, and v2's tau is piecewise in time. The dummy window sits inside v2's first regime,
+    # so this is one cutoff here — but writing the inequality out by hand is the mistake apply()
+    # exists to prevent, and a dummy that models it wrong teaches the wrong shape.
+    ev[schema.DECISION] = threshold.apply("v2", ev, score_col=schema.SCORE).astype(int)
+
+    # `observed` is absent for the earliest rows: the v3 extract that supplies it starts later
+    # than the log does. NULL IS UNOBSERVED, NOT 0.
+    cut = int(len(ev) * (1 - EXTRACT_COVERAGE))
+    ev[schema.OBSERVED] = ev[schema.OBSERVED].astype("float64")
+    ev.loc[ev.index[:cut], schema.OBSERVED] = np.nan
+
+    keys = [schema.CLAIM_ID, EVENT_ID]
+
+    # ---- the four pieces, split BY COLUMN off the one frame --------------------------------
+    raw = pd.DataFrame({f"v2_raw{i + 1}": (
+        rng.choice(list("ABCDEFGH"), size=len(ev)) if i % 2 else
+        np.round(rng.lognormal(7.5, 0.8, size=len(ev)), 2)) for i in range(N_LOG_RAW_COLS)})
+    _write(pd.concat([ev[keys], raw], axis=1), config.path("log_raw", "v2", "real"), written)
+
+    feats = pd.DataFrame({f"v2_feat{i + 1}": np.round(rng.rand(len(ev)), 4)
+                          for i in range(len(FEATURES["v2"]))})
+    _write(pd.concat([ev[keys], feats], axis=1),
+           config.path("log_features", "v2", "real"), written)
+
+    _write(ev[keys + [schema.SCORE, schema.DECISION]],
+           config.path("log_scores", "v2", "real"), written)
+    _write(ev[keys + [schema.DATE, schema.OBSERVED]],
+           config.path("log_targets", "v2", "real"), written)
+
+    # ---- the canonical log: ONE ROW PER CLAIM ---------------------------------------------
+    # The notebook refuses to collapse silently and asserts instead, because which event is "the"
+    # decision for a claim is an analysis choice. The dummy has to pick one: earliest event, so
+    # the log records the decision that was actually acted on first.
+    log = (ev.sort_values(schema.DATE)
+             .drop_duplicates(subset=schema.CLAIM_ID, keep="first")
+             .sort_values(schema.DATE, ignore_index=True)
+             [[schema.CLAIM_ID, schema.DATE, schema.SCORE, schema.DECISION, schema.OBSERVED]])
+    _write(log, config.path("log", "v2", "real"), written)
 
 
 def _write(df: pd.DataFrame, path: pathlib.Path, written: list[pathlib.Path]) -> None:
@@ -353,6 +420,11 @@ def main() -> None:
         "not": "no Allianz value, name or claim is present; every number is from a seeded RNG",
         "seed": SEED,
         "versions": a.versions,
+        # SHAP attributions are NOT written here — src/data/make_dummy_shap.py writes them under
+        # detection/shap/ with its own seed. They are absent from `files`, so --clean leaves them
+        # behind, and the next --force then meets an unmarked tree and refuses. Delete them by
+        # hand if that happens. (This note is regenerated each run; do not hand-edit the marker.)
+        "also": "detection/shap/** comes from src/data/make_dummy_shap.py, not from this script",
         "files": sorted(str(p.relative_to(config.ROOT)) for p in written),
     }, indent=2), encoding="utf-8")
 
