@@ -1,4 +1,7 @@
-"""Reweighting corrector — notebook 03_02's four schemes (naive / A / B / AB), real-data port.
+"""Reweighting corrector — notebook 03_02's four schemes, real-data port.
+
+Scheme names are the THESIS terms (sec:exec-mitigation), not the notebook's a/b/c letters:
+naive / rarity (Axis A) / transport (Axis B soft split) / pnu (combined).
 
 Column names below are the CANONICAL ones (src/schema.py), already translated at ingest.
 
@@ -35,14 +38,14 @@ is emitted TWICE — retrain.py's inner join duplicates the feature row to match
 
 THE FOUR SCHEMES:
 
-    scheme   garage rows            model-scrapped rows (U)
-    naive    (observed, 1)          (1, 1)                            the contaminated baseline
-    A        (observed, m_c)        (1, m_c)                          weights only, labels kept
-    B        (observed, 1)          (1, g) + (0, 1-g)                 labels softened
-    AB       (observed, m_c)        (1, g*m_c) + (0, (1-g)*m_c)      B's split x A's rarity
+    scheme     garage rows           model-scrapped rows (U)
+    naive      (observed, 1)         (1, 1)                           the contaminated baseline
+    rarity     (observed, m_c)       (1, m_c)                         Axis A only, labels kept
+    transport  (observed, 1)         (1, g) + (0, 1-g)                Axis B only, labels softened
+    pnu        (observed, m_c)       (1, g*m_c) + (0, (1-g)*m_c)     transport split x rarity
 
 TAU. U is NEVER defined by tau — it is the recorded decision column. tau only shapes the band,
-so `naive` and `B` are byte-identical under either mode; only A / AB depend on it.
+so `naive` and `transport` are byte-identical under either mode; only rarity / pnu depend on it.
 
     tau_mode="regime"   tau_i = the decider version's cutoff in force on row i's date
                         (config.threshold_on; decider defaults to "v2" — the v2 log generated
@@ -54,12 +57,12 @@ WHICH COLUMNS g SEES: config.model_features(version), same rule and same reason 
 exported matrix carries the target beside the inputs, so "everything except claim_id" would fit
 g on the outcome it is trying to recover.
 
-  PYTHONPATH=src .venv/bin/python -m mitigator.corrector.reweight --version v3 --scheme B \
+  PYTHONPATH=src .venv/bin/python -m mitigator.corrector.reweight --version v3 --scheme transport \
       --features src/data/real/inputs/features_v3_train.parquet \
       --targets  src/data/real/inputs/targets_v3_train.parquet \
-      --out      src/data/real/mitigation/v3_corrected_train_B.parquet
+      --out      src/data/real/mitigation/v3_corrected_train_transport.parquet
 
---targets must carry claim_id + decision + observed; A/AB also need score, plus date when
+--targets must carry claim_id + decision + observed; rarity/pnu also need score, plus date when
 tau_mode="regime". A sibling <out stem>_meta.json records scheme / tau / cell table — none of
 which are recoverable from the parquet itself.
 """
@@ -79,22 +82,21 @@ import config
 import threshold
 from mitigator.corrector.base import TrainingDataCorrector
 
-SCHEMES = ("naive", "A", "B", "AB")
+SCHEMES = ("naive", "rarity", "transport", "pnu")
 
 CELL_NAMES = {
     1: "high-repairable (verified edge)",
-    2: "high-TL (U + verified band TL)",
+    2: "high-total-loss (U + verified band total-loss )",
     3: "low-repairable",
-    4: "low-TL",
+    4: "low-total-loss ",
 }
-
 
 class ReweightCorrector(TrainingDataCorrector):
     """03_02's reweighting schemes behind the TrainingDataCorrector interface."""
 
     def __init__(
         self,
-        scheme: str = "B",
+        scheme: str = "transport",
         tau_mode: str = "regime",
         decider: str = "v2",
         tau: float | None = None,
@@ -154,7 +156,7 @@ class ReweightCorrector(TrainingDataCorrector):
 
     def _required_target_cols(self) -> list[str]:
         need = [self.id_col, self.decision_col, self.outcome_col]
-        if self.scheme in ("A", "AB"):
+        if self.scheme in ("rarity", "pnu"):
             need.append(self.score_col)
             if self.tau_mode == "regime":
                 need.append(self.date_col)
@@ -261,7 +263,7 @@ class ReweightCorrector(TrainingDataCorrector):
 
         # Axis A: per-row tau -> band -> cell -> rarity multiplier
         w_cell = None
-        if self.scheme in ("A", "AB"):
+        if self.scheme in ("rarity", "pnu"):
             tau = self._tau_per_row(m)
             s = m[self.score_col].to_numpy(dtype=float)
             high = s >= (tau - self.band_h)
@@ -293,7 +295,7 @@ class ReweightCorrector(TrainingDataCorrector):
 
         # Axis B: transport split of the U rows
         g_u = None
-        if self.scheme in ("B", "AB"):
+        if self.scheme in ("transport", "pnu"):
             g_u = self._transport(m, feat_cols, garage, scrapped, y)
             diag["transport"] = {
                 "estimator": "StandardScaler + LogisticRegression(max_iter=1000)",
@@ -309,11 +311,11 @@ class ReweightCorrector(TrainingDataCorrector):
         ids = m[id_col].to_numpy()
         if self.scheme == "naive":
             out = pd.DataFrame({id_col: ids, "label": y, "weight": np.ones(len(m))})
-        elif self.scheme == "A":
+        elif self.scheme == "rarity":
             out = pd.DataFrame({id_col: ids, "label": y, "weight": w_cell})
-        else:  # B / AB — U rows duplicated into a (1, g) and a (0, 1-g) half
-            w_gar = w_cell[garage] if self.scheme == "AB" else np.ones(n_garage)
-            w_u = w_cell[scrapped] if self.scheme == "AB" else np.ones(n_scrapped)
+        else:  # transport / pnu — U rows duplicated into a (1, g) and a (0, 1-g) half
+            w_gar = w_cell[garage] if self.scheme == "pnu" else np.ones(n_garage)
+            w_u = w_cell[scrapped] if self.scheme == "pnu" else np.ones(n_scrapped)
             out = pd.concat(
                 [
                     pd.DataFrame({id_col: ids[garage], "label": y[garage], "weight": w_gar}),
