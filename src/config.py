@@ -685,7 +685,16 @@ def model_features(version: str) -> list[str]:
             f"{p} does not exist, so the feature columns of {version} cannot be determined.\n"
             f"Build it inside that version's env:\n"
             f"    {python_bin(version)} features/extract_features.py --version {version}\n")
-    names = json.loads(p.read_text(encoding="utf-8")).get("model_features") or None
+    payload = json.loads(p.read_text(encoding="utf-8"))
+    if "DUMMY" in str(payload.get("model_path", "")):
+        # The stand-in registry matches only the dummy tree; against the real matrix its names
+        # produce a "missing columns" failure downstream that misdiagnoses the matrix as wrong.
+        script = "extract_features_v1.py --model <v1 pkl>" if version == "v1" \
+            else f"extract_features.py --version {version}"
+        print(f"  WARNING: {p} is the LOCAL STAND-IN registry (features/registry/_DUMMY_REGISTRY)."
+              f" On the company laptop rebuild it first, inside env-{version}:\n"
+              f"    <env-{version} python> features/{script}")
+    names = payload.get("model_features") or None
     if names is None:
         raise SystemExit(
             f"{p} has no `model_features` — extract_features.py could not recover them from the "

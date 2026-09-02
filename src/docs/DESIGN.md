@@ -25,7 +25,7 @@ This means swapping synthetic data for real data, or swapping one detection algo
 | Detection | `DetectionAlgorithm` | `ResidualPeakAlgorithm` |
 | **Effect estimation** ★ | **`EffectEstimator`** | `RDDEstimator` (nb 04-01) · `ShapDiDEstimator` (nb 04-02) · `LogitAdjustEstimator` (nb 04-03) |
 | Investigation policy | `InvestigationPolicy` | TBD (pending research) |
-| Training data correction | `TrainingDataCorrector` | `IPSCorrector` |
+| Training data correction | `TrainingDataCorrector` | `IPSCorrector` · `ReweightCorrector` (nb 03-02's naive/rarity/transport/pnu; transport/pnu emit duplicated `claim_id` split rows, which `retrain.py`'s join expands) |
 | **Re-evaluation** ★ | **`ReEvalMetric`** | `DecisionFlipCount` · `DetectionDelta` · `ShapDiDDelta` · `OracleValidation` (synthetic-only) |
 
 ## Class Responsibilities
@@ -100,7 +100,7 @@ Model versions will also continue to be updated over time, so the design must ab
 
 **Scoring and analysis are fully decoupled.**
 
-1. **Scoring stage** — each model version is scored **once**, inside its **own** environment (`env-v1` / `env-v2` / `env-v3`, built with uv — see `ENV_MANAGEMENT.md`), by a single version-agnostic script (`src/scoring/predict.py`). The active environment *is* that version's environment, so there is never a cross-version import conflict in a single process. Output: one parquet score file per version. **`scoring/attribute.py` is its sibling** and runs in exactly the same way, emitting per-row SHAP attributions instead of scores — because SHAP needs the model object, and the model object only exists inside this env.
+1. **Scoring stage** — each model version is scored **once**, inside its **own** environment (`env-v1` / `env-v2` / `env-v3`, built with uv — see `ENV_MANAGEMENT.md`), by a version-agnostic script (`src/scoring/predict.py`; env-v1 runs `predict_v1.py`, its frozen py3.5 twin — same flags, same behaviour). The active environment *is* that version's environment, so there is never a cross-version import conflict in a single process. Output: one parquet score file per version. **`scoring/attribute.py` is its sibling** and runs in exactly the same way, emitting per-row SHAP attributions instead of scores — because SHAP needs the model object, and the model object only exists inside this env.
 2. **Analysis stage** — the pipeline (detector / **estimator** / mitigator / **reeval**) runs in one environment and **never loads a model**. It reads the precomputed per-version score **and attribution** files and merges them on `claim_id`.
 
 Because the two stages never share a process, there is no parent/child coordination, no temp-file marshalling, and no stdout parsing. Scores are cached on disk, so re-running the analysis any number of times does not re-score anything.
@@ -110,7 +110,7 @@ Because the two stages never share a process, there is no parent/child coordinat
 ```
 [ Scoring stage — run once per version, each in its own env ]
 
-  uv env: env-v1                          src/scoring/predict.py
+  uv env: env-v1                          src/scoring/predict_v1.py   (the py3.5 twin)
   ┌───────────────────────────┐           --model    models/synthetic/baseline/v1.pkl
   │ joblib.load(v1 baseline)  │  ───────▶ --features  data/synthetic/inputs/features_v1.parquet   ← per-version
   │ predict_proba(X)[:,1]     │           --version   v1
@@ -154,7 +154,7 @@ Each version is scored on its **own** model-ready feature file — `features_v1.
 
 ### Implementation
 
-**`src/scoring/predict.py`** — version-agnostic batch scorer. Run *inside* the target model's own environment; the active env and the CLI args decide which version is scored. The script has no knowledge of which version it is running.
+**`src/scoring/predict.py`** — version-agnostic batch scorer. Run *inside* the target model's own environment; the active env and the args decide which version is scored — the script has no knowledge of which version it is running. Since 2026-09-02 it is the modern (≥3.10) shared v2/v3 worker exposing an importable `predict()` (03_03 calls it in-kernel; the CLI main wraps the same function), and `predict_v1.py` is its frozen py3.5 twin for env-v1.
 
 ```python
 # src/scoring/predict.py
@@ -290,7 +290,7 @@ src/envs/
 
 Each version retains an independent spec even when dependencies currently coincide, so retraining or upgrading one version never silently mutates another's pinned environment.
 
-`src/envs/<version>/` holds **specs and build notes only — no code**; the one script in `src/envs/` itself, `check_installed.py`, is an *inspector* of built envs (declared-vs-installed across several venvs at once — see `ENV_MANAGEMENT.md` § "Verifying what a built env actually contains"), never a builder, so the no-code-per-version rule stands. And installing the pins is only half of building the env: the version repo's own modules must also be importable, because that is what unpickles the model. The real repos are not installable packages (no package declaration, no `__init__.py`), so that half is a hand-written `fttl.pth` in each env's `site-packages` rather than an editable install — see `ENV_MANAGEMENT.md` § "Making the version repo importable", which also records the interpreter each real env was actually built on (v1 3.5.6 conda, v2 3.10, v3 3.11).
+`src/envs/<version>/` holds **specs and build notes only — no code**, and `src/envs/` itself holds no script either (`check_installed.py`, an inspector of built envs, was deleted 2026-08-31 without ever being used), so the no-code-per-version rule stands unqualified. And installing the pins is only half of building the env: the version repo's own modules must also be importable, because that is what unpickles the model. The real repos are not installable packages (no package declaration, no `__init__.py`), so that half is a hand-written `fttl.pth` in each env's `site-packages` rather than an editable install — see `ENV_MANAGEMENT.md` § "Making the version repo importable", which also records the interpreter each real env was actually built on (v1 3.5.6 conda, v2 3.10, v3 3.11).
 
 ### Adding a new model version (e.g., v4)
 

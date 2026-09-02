@@ -24,6 +24,30 @@ repo/
     ├── schema.py             # [now] canonical column names + to_canonical()/require(). The
     │                         #   translation applied once at ingest — see § "Paths are resolved by KIND"
     ├── figstyle.py           # canonical matplotlib style for all dissertation figures (spec: notebook/FIGURE_TEMPLATE.md)
+    ├── trained_order.py      # [now 2026-09-01] the trained column ORDER, defined once: model_feature_names ·
+    │                         #   feature_order (exact / reordered / set_mismatch / unverified) · align ·
+    │                         #   read_registry · select_features (the booster-then-registry ladder that
+    │                         #   picks the model's columns out of an export matrix carrying the target).
+    │                         #   shap_kit.py, shap_kit_v1.py and training/retrain.py all import these
+    │                         #   four names from here and re-export them, so a `feature_order` verdict
+    │                         #   means the same thing in a v1 meta as in a v3 one. It was three
+    │                         #   copy-pasted copies until 2026-09-01 and they had DRIFTED: only the v1
+    │                         #   one rejected xgboost's fabricated f0/f1/... names, only the retrain one
+    │                         #   returned None rather than [] — so one pickle could be "exact" to one
+    │                         #   caller and "unverified" to another. Stdlib only, Python 3.5 syntax,
+    │                         #   ASCII-only strings, because env-v1 imports it too. NOT the producer
+    │                         #   side: features/extract_features.py keeps its own (deliberately
+    │                         #   different, source-labelled) ladder — see § "One notebook, three
+    │                         #   environments".
+    ├── model_io.py           # [now 2026-09-01] unpickling a fitted model, defined once: load_any() tries
+    │                         #   sklearn.externals.joblib -> joblib -> load_compatibility -> pickle and
+    │                         #   REPORTS which one answered; load_estimator() unwraps a Pipeline to its
+    │                         #   final step. v1's 2018 artefact does not open under plain joblib.load
+    │                         #   (sklearn < 0.23 vendored a different joblib; the standalone unpickler
+    │                         #   desyncs with KeyError). The ladder was copy-pasted in shap_kit_v1.py and
+    │                         #   features/extract_features_v1.py, each with a comment saying it had to
+    │                         #   stay identical to the other -- a rule no code enforced. Same 3.5 +
+    │                         #   ASCII + stdlib rules as trained_order.py, and the same reason.
     ├── shap_kit.py           # [now] the ONE module notebook/real/00_SHAP.ipynb imports. Runs INSIDE
     │                         #   env-v1/v2/v3, so it may use only numpy/pandas/matplotlib: every
     │                         #   figure (beeswarm · waterfall · force · dependence · band bars ·
@@ -61,7 +85,10 @@ repo/
     │   └── logit_adjust.py        # notebook 04_03 — conditional odds ratio; falsify() FAILS by design
     ├── mitigator/            # "how do we fix it?"
     │   ├── sfp_mitigator.py
-    │   ├── corrector/
+    │   ├── corrector/             # TrainingDataCorrector ABC → IPSCorrector · ReweightCorrector
+    │   │                          #   (03_02's naive/rarity/transport/pnu schemes, 2026-09-01;
+    │   │                          #   transport/pnu emit DUPLICATED claim_ids — retrain.py's join
+    │   │                          #   handles it)
     │   └── policy/
     ├── reeval/               # [plan] "what CHANGED?" — the only layer that reads TWO artefact sets
     │   ├── reevaluator.py         # ReEvaluator: composes detector/estimator over (before, after)
@@ -69,6 +96,9 @@ repo/
     │                              #   ShapDiDDelta (footprint erased?) · OracleValidation (SYNTHETIC-ONLY)
     ├── loaders/              # [now] the ONE way a notebook reaches a version's artefacts
     │   └── version_data.py   #   load(v) -> VersionData: .frame · .tau · .decisions · .features
+    │                         #   Reads parquet; a declared `.pkl` source goes through joblib.load,
+    │                         #   NOT pd.read_pickle — the Z: artefacts wear a .pkl extension but are
+    │                         #   joblib dumps, and pandas dies on them (fixed 2026-09-01).
     │                         #   No synthetic/real subclasses — config's `source` handles that.
     │
     ├── scoring/              # VERSION LAYER — runs inside env-vX; the only code that opens a pkl
@@ -79,7 +109,13 @@ repo/
     │   │                      #  targets_<v>_<split>, the export notebooks' own file, so its only
     │   │                      #  remaining effect was to overwrite a split's targets with a
     │   │                      #  different population. The export notebooks are the sole producer.)
-    │   ├── predict.py         # model + features → detection/<v>_scores
+    │   ├── predict.py         # model + features → detection/<v>_scores. [2026-09-02] the MODERN
+    │   │                      #   (>=3.10) shared v2/v3 worker: importable predict() function
+    │   │                      #   (03_03 calls it in-kernel); the CLI main wraps the same call.
+    │   ├── predict_v1.py      # [2026-09-02] its FROZEN py3.5 twin — the env-v1 scorer (CSV I/O,
+    │   │                      #   no config import, ASCII console). score_all.py dispatches on
+    │   │                      #   config.NO_PARQUET_ENVS. Behaviour changes land in predict.py
+    │   │                      #   FIRST, then are hand-ported here in 3.5 syntax.
     │   ├── attribute.py       # [now] model + features → detection/shap/<v>/<v>_attributions + _meta.json
     │   │                      #   (per-row φ; the sibling of predict.py — SHAP must run where the
     │   │                      #   pkl unpickles). Backends: shap TreeExplainer (interventional,
@@ -91,6 +127,16 @@ repo/
     │   ├── attribute_all.py   # [now] the attribution driver. Also picks ONE claim set (id-column
     │   │                      #   intersection + seeded sample) so every version explains the same
     │   │                      #   rows — otherwise a concentration shift can be case-mix.
+    │   ├── backfill_feature_order.py
+    │   │                      # [now] adds `feature_order` to metas written before the check
+    │   │                      #   existed (2026-08-31). Reads meta["feature_names"] against the
+    │   │                      #   pickle's own trained names — no phi are recomputed, no parquet
+    │   │                      #   is opened. v2/v3 only; v1 gets its own file (py3.5).
+    │   ├── backfill_feature_order_v1.py
+    │   │                      # [now] the py3.5 twin. Separate because env-v1 cannot import
+    │   │                      #   config.py at all (PEP 563/585 syntax) and because v1 resolves
+    │   │                      #   the column order from features/registry/v1.json when xgboost
+    │   │                      #   0.72 exposes only f0/f1/… — the status then says "(via registry)".
     │   └── load_scores.py     # (inspect_pickle.py DELETED 2026-08-19 — the one-off onboarding
     │                          #  util that reported a prod pickle's schema + date range. Its job
     │                          #  is done: the export notebooks 01_export_v{1,2,3} now read every
@@ -100,12 +146,15 @@ repo/
     │   └── v1.py · v2.py · v3.py
     ├── training/             # VERSION LAYER — the worker runs inside env-vX, the driver does not
     │   ├── retrain.py         # MITIGATED retrainer — clones baseline hyperparams, weighted.
-    │   │                      #  The ONLY trainer left. PYTHON 3.5 COMPATIBLE ON PURPOSE (env-v1
-    │   │                      #  is 3.5.6): no f-strings, no future-annotations — which is also
-    │   │                      #  why it cannot import config.py (itself 3.7+) and takes paths as
-    │   │                      #  arguments. Feature columns come from the BASELINE BOOSTER's own
-    │   │                      #  feature_names, never "everything except claim_id" — the export
-    │   │                      #  notebooks write the TARGET into the matrix.
+    │   │                      #  The ONLY trainer left. [2026-09-02] MODERN (>=3.10): v1 is never
+    │   │                      #  retrained, so the py3.5 discipline it used to carry protected an
+    │   │                      #  interpreter that can never reach it. Importable retrain()
+    │   │                      #  function (03_03 calls it in-kernel); the CLI main wraps the same
+    │   │                      #  call. Paths still arrive as ARGUMENTS, never from config — the
+    │   │                      #  caller resolves them (driver / notebook). Feature columns come
+    │   │                      #  from the BASELINE BOOSTER's own feature_names, never "everything
+    │   │                      #  except claim_id" — the export notebooks write the TARGET into
+    │   │                      #  the matrix.
     │   ├── retrain_all.py     # [now] its config-aware driver, in the ANALYSIS env: resolves
     │   │                      #  model/processed_inputs/corrected/mitigated by KIND and launches
     │   │                      #  each version's interpreter. Same split as score_all -> predict.
@@ -125,8 +174,6 @@ repo/
     │   │                      #  (est.predict(output_margin=True), which xgboost < 0.81's
     │   │                      #  sklearn wrapper does not honour) and the NEW one
     │   │                      #  (shap_kit_v1.model_margin → the booster) side by side
-    │   └── check_installed.py #  audits a pyproject's deps across N venvs at once (repo .venv vs
-    │                          #  envs/vN/.venv); reports version drift + PEP 610 git/local origins
     │   └── LOCAL_STANDIN.md   # what the LOCAL .venvs are and are not — v3 matches its pin
     │                          #   (xgboost 3.2.0), v1/v2 cannot and deliberately carry none
     │
@@ -161,6 +208,9 @@ repo/
         │   └── reeval/        #  ┘ (see § "Three worlds", and the two @TODOs there)
         └── real/          # gitignored (src/data/real/) — real exports, or the dummy stand-in
             ├── _DUMMY_DATA    #   present ⇒ this tree is fake and disposable; absent ⇒ treat as real
+            ├── DATA_MODEL.md  #   EVERY artefact's columns, grain and keys, one page. The single
+            │                  #   .gitignore exception in this tree, because it must reach the
+            │                  #   company laptop. Layout lives here; COLUMNS live there.
             ├── logs/          # only v2 has a production log (v1's destroyed, v3 never deployed)
             │   ├── v2.parquet         # kind `log`       — ONE ROW PER CLAIM, canonical names
             │   ├── v2_raw.parquet      # `log_raw`      ┐ one row per SCORING EVENT, keyed
@@ -288,9 +338,18 @@ off that version's own pickles: `raw_features` (what the preprocessor expects) a
 (what the booster consumes). `config.registry_path(v)` resolves the path; config never stores the
 names, because a copy would be a second source of truth free to drift from the pickles — the
 failure mode `01_export_v2.ipynb` documents for its pasted `MODEL_FEATURES`. Consumers try the open
-booster first and the registry second: `training/retrain.py::select_features` (fed by
-`retrain_all.py --features-json`) and `notebook/real/00_SHAP.ipynb` §2 are the two implementations,
-and both refuse rather than guess when neither route answers.
+booster first and the registry second, and refuse rather than guess when neither route answers.
+
+*(revised 2026-09-01.)* That ladder is now **one function** — `trained_order.select_features`,
+imported by `training/retrain.py` and `scoring/predict.py` alike, so fitting and scoring cannot
+pick different columns; `notebook/real/00_SHAP.ipynb` §2 reaches it through `shap_kit`. A process
+that cannot open the pickle at all asks `config.model_features(v)`, which reads the same registry
+— that is the analysis-env route, and `mitigator/corrector/ips.py` takes it (its propensity model
+was being fitted on every column but `claim_id`, i.e. on the outcome it exists to correct for).
+`scoring/predict.py` had the same `drop(columns=["claim_id"])` bug and now selects by trained
+name, which fixes the column ORDER at the same time: xgboost matches positionally when names are
+absent and raises `feature_names mismatch` when they are present, so a reordered frame is either
+silently wrong or a hard stop.
 
 **Columns are translated once, at ingest.** `VERSIONS[v]["columns"]` maps our canonical name →
 that version's real name (`config.rename_map(v)` hands back the `df.rename` dict). Downstream code
@@ -314,6 +373,30 @@ schema had no business in a real-data config, and nothing imported them. Noteboo
 `SCRAP_THRESHOLD` and `TARGET_PRECISION`, so those stay. The oracle column `true_garage_outcome` is
 now **optional everywhere** (`pipeline.py --oracle-col`, off by default) rather than required, since
 real data cannot have it: a scrapped car is never sent to a garage.
+
+### One env cannot read parquet, so paths have two flavours (added 2026-09-01)
+
+`config.path()` is the **analysis env's** truth: every artefact is parquet, identically for all
+three versions, and that is what `loaders/` and the notebooks resolve. env-v1 cannot honour it —
+Python 3.5.6 has no pyarrow and no fastparquet, and neither can be built for it.
+
+```python
+config.NO_PARQUET_ENVS                                   # ("v1",) — a legacy carve-out, not a list that grows
+config.path("scores", "v1", split="test")                # detection/v1_scores_test.parquet   <- analysis reads
+config.worker_path("scores", "v1", split="test")         # detection/v1_scores_test.csv       <- env-v1 writes
+config.worker_path("scores", "v2", split="test")         # …v2_scores_test.parquet — unchanged
+```
+
+Same directory, same stem, different extension — exactly the convention `01_export_v1.ipynb`
+writes under and `v1_csv_to_parquet.py` converts from. **Hand `worker_path` to anything running
+inside a version env** (`score_all.py` does, for `--features` and `--out`) and keep `path` for
+everything the analysis env reads. A v1 run therefore leaves CSV behind and is not finished until
+the converter has run; `score_all.py` prints that reminder rather than assuming it.
+
+CSV is the *transport* out of env-v1, not a second storage format. Unifying v1 on CSV would push
+a per-version branch into every reader and re-infer dtypes on every read instead of fixing them
+once at conversion — including `claim_id`, whose dtype decides whether
+`attribute_all.common_sample()` finds a cross-version intersection at all.
 
 ### Some kinds exist ONLY per split (added 2026-08-18)
 
@@ -349,10 +432,10 @@ generalisation; one version on train against another on a holdout is a confound,
 the split is stamped into the output filename **and** into the attribution sidecar meta, and
 `concentration.require_comparable()` prints it back when the versions disagree.
 
-**Pooling is available but must be typed.** `loaders.load(v, split=config.ALL_SPLITS)` reads every
-split and concatenates, adding a `split` column so the pooling stays visible in the frame itself.
-Use it where the analysis is a *population* statement across versions — `02_error_inheritance` is
-the case — and drop the marker before any cross-version join, since v1's `test` and v2's `test` are
+**Pooling is available but must be typed — at the call site.** One `loaders.load()` is one split;
+the loader has no pooled mode. Where the analysis is a *population* statement across versions —
+`02_error_inheritance` is the case — the notebook concatenates `config.SPLITS[version]` itself, in
+a helper the reader can see, and carries no split marker, since v1's `test` and v2's `test` are
 different sets.
 
 **What this does NOT unify:** the decision rule. `DECISION_RULES` keeps v1 segmented, v2
@@ -401,8 +484,9 @@ recorded choice and **raises rather than defaulting** when a claim has more than
 The four event-grain pieces are the same row set cut by column, so they rejoin on both keys exactly.
 
 **Why the log's score column is `score`, not `model_v2_score`.** The `scores` kind carries a
-version-tagged name because `loaders.scores_wide()` merges every version's scores into one frame on
-`claim_id` — untagged, that merge would collide into `score_x`/`score_y`. A log is one version's own
+version-tagged name because a cross-version test merges two versions' scores into one frame on
+`claim_id` — `02_error_inheritance` joins v1's and v2's, and untagged they would collide into
+`score_x`/`score_y`. A log is one version's own
 record, is never merged with another version's log (there are no others), and is read by
 `threshold.apply(..., score_col=schema.SCORE)`, which expects the canonical name. `make_dummy_real.py` renames in the same direction on purpose. If a log ever
 needs a version tag, rename on read: `d.log.rename(columns={schema.SCORE: d.score_col})`.
@@ -410,7 +494,7 @@ needs a version tag, rename on read: `d.log.rename(columns={schema.SCORE: d.scor
 **Neither kind is a SPLIT kind.** train/val/test is a property of model *training*, not of
 production serving: the log spans the serving history and most of it postdates training. So
 `config.path("log_features", "v2")` takes no `split=`, and `"log"` must never be added to
-`config.SPLITS` — that would pull production rows into `ALL_SPLITS` pooling alongside training rows.
+`config.SPLITS` — that would make production rows resolvable as if they were a training split.
 The log's natural partition is the **regime** (`DECISION_RULES["v2"]["regimes"]`, five of them),
 computed from `date` on read, not baked into filenames.
 
@@ -699,7 +783,7 @@ Scoring and analysis are decoupled — they never share a process. See `DESIGN.m
                               ▼
 [ Scoring — run once per version, each in its OWN env ]
 
-  env-v1  python predict.py --model models/synthetic/baseline/v1.pkl \
+  env-v1  python predict_v1.py --model models/synthetic/baseline/v1.pkl \
                             --features data/synthetic/inputs/features_v1.parquet → data/synthetic/detection/v1_scores.parquet
   env-v2  python predict.py --model models/synthetic/baseline/v2.pkl \
                             --features data/synthetic/inputs/features_v2.parquet → data/synthetic/detection/v2_scores.parquet
@@ -733,11 +817,122 @@ Analysis env   SFPDetector(baseline_scores vs mitigated_scores) → SFP metric d
 
 | Component | Runs in | Notes |
 |---|---|---|
-| `predict.py` scoring v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; isolated process; writes `detection/*_scores.parquet` |
-| `training/retrain.py` re-train v1/v2/v3 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; re-evaluation step; reuses baseline prep, fits weighted on corrected labels → `models/…/mitigated/v<k>.pkl` |
+| `predict.py` scoring v2/v3 · `predict_v1.py` scoring v1 | `env-v{1,2,3}` (`src/envs/`) | Own uv env; isolated process; writes `detection/*_scores`. Pattern B since 2026-09-02 — the shared file is modern (≥3.10, importable `predict()`), the frozen py3.5 twin reads/writes CSV, see below |
+| `training/retrain.py` re-train v2/v3 | `env-v{2,3}` (`src/envs/`) | Own uv env; re-evaluation step; modern (≥3.10, importable `retrain()`) since 2026-09-02 — v1 is never retrained; reuses baseline prep, fits weighted on corrected labels → `models/…/mitigated/v<k>.pkl` |
 | pipeline, detector, mitigator, `load_scores.py`, the `*_all.py` drivers | analysis env (`.venv`) | `uv add`/`uv sync` → `pyproject.toml` + `uv.lock`; reads precomputed parquet, no model dependency |
 
-> **Two environment tiers.** The analysis `.venv` is one evolving env managed by `uv add` (`pyproject.toml` + `uv.lock`). The per-version scoring envs (`env-v1`/`env-v2`/`env-v3`, under `src/envs/`) are frozen, independently pinned, and managed separately — never folded into the analysis `pyproject.toml`. See `ENV_MANAGEMENT.md`.
+### Three patterns: which interpreter a file runs under (added 2026-09-01)
+
+The table above says *which tier*; this one says which of the four interpreters a given file can
+actually be launched with, and — for a file that does not exist yet — which of three patterns to
+write it in. Answer three questions in order:
+
+1. **Does it open a model pickle?** No → **pattern C**, the analysis `.venv`. A pkl only unpickles
+   where its repo is importable and its xgboost matches, so anything that opens one belongs to a
+   version env; everything else belongs to the layer that must stay model-free.
+2. **Must it run under v1?** No → write it in ordinary 3.7+ and it serves env-v2 and env-v3
+   interchangeably (the right-hand column of **pattern B**). v1 gets a twin later, or never.
+3. **It must run under v1 — do its dependencies survive the 3.5 floor?** Yes → **pattern A**, one
+   file for all three. No → **pattern B**, a shared v2/v3 file plus a `<name>_v1.py` twin.
+
+Question 3 is the real fork, and the answer is about *dependencies*, not effort. A scorer
+needs pandas and a pickle, both of which exist under 3.5; `shap_kit.py` needs matplotlib's modern
+plotting layer and shap's `Explanation`, neither of which does. Rewriting the latter to the floor
+would mean a worse module for v2/v3 to buy a v1 that still could not draw the same figures.
+But dependencies surviving the floor only justifies pattern A while question 2 answers "yes":
+`predict.py` was pattern A for one day (2026-09-01) and was re-split to pattern B on 2026-09-02,
+because its only v1 duty is baseline scoring — carrying the whole 3.5 discipline in the shared
+file bought nothing the frozen twin doesn't provide.
+
+**Pattern A — one file, any of `env-v1/v2/v3`.** Swap the interpreter, same file, same arguments.
+
+| File | |
+|---|---|
+| `trained_order.py` · `model_io.py` | libraries the version-layer workers import; also imported by the v1 twins — the parts that MUST agree across versions stay one definition |
+
+(`training/retrain.py` and `scoring/predict.py` left this category on 2026-09-02 — both are now
+modern ≥3.10 with importable `retrain()`/`predict()` functions whose CLI mains wrap the same
+call, and `notebook/real/mitigation/03_03_retrain.ipynb` imports them in-kernel instead of
+subprocessing. retrain has no twin: v1 is never retrained.)
+
+Four disciplines, none optional, and each one is a *parse* or *runtime* failure in env-v1 rather
+than a style preference:
+
+* **3.5 syntax** — no f-strings (3.6), no variable annotations (3.6), no
+  `from __future__ import annotations` (3.7), no builtin generics `list[str]` (3.9), no
+  `X | None` unions (3.10). env-v1 is Python 3.5.6 and cannot parse them. **Return annotations
+  are not on that list** — function annotations predate 3.0 and `typing` shipped with 3.5, so
+  every function here declares its return type like any other file in the repo.
+* **ASCII-only** in anything printed or raised — that console is not UTF-8, and an em dash in a
+  `SystemExit` message turns a clean error into a `UnicodeEncodeError`.
+* **no `import config`** — `config.py` is 3.7+ itself, so importing it excludes env-v1
+  transitively. Paths arrive as CLI arguments; a config-aware driver in the analysis env
+  (`score_all.py`, `retrain_all.py`) resolves them by KIND.
+* **I/O branches on the file extension** — env-v1 has no parquet engine (no pyarrow for 3.5), so
+  v1 reads and writes CSV and `v1_csv_to_parquet.py` converts afterwards. `predict_v1.py`'s
+  `read_table`/`write_table` are the pattern.
+
+> `score_all.py` resolves the CSV twins via `config.worker_path` (which swaps `.parquet` → `.csv`
+> for `config.NO_PARQUET_ENVS`) and dispatches env-v1 to `predict_v1.py`, so a v1 scoring run no
+> longer needs hand-typed paths.
+
+**Pattern B — shared v2/v3 file + a `<name>_v1.py` twin.** The v1 file is written last, against
+the frozen shared one, and never retrofitted into it. Behaviour changes land in the shared file
+FIRST, then are hand-ported to the twin in 3.5 syntax.
+
+| Shared (env-v2 / env-v3) | v1 twin |
+|---|---|
+| `shap_kit.py` | `shap_kit_v1.py` |
+| `features/extract_features.py` | `features/extract_features_v1.py` |
+| `scoring/backfill_feature_order.py` | `scoring/backfill_feature_order_v1.py` |
+| `scoring/predict.py` | `scoring/predict_v1.py` (frozen 2026-09-02 from the pattern-A body) |
+| `training/retrain.py` | **none, by decision** — v1 is never retrained (training data destroyed; 03_03 refuses env-v1) |
+| `scoring/attribute.py` | **none, by decision** — `notebook/real/00_SHAP_v1.ipynb` + `shap_kit_v1` already writes the same artefact (as CSV, backend `native`). `attribute_all.NO_HEADLESS_ATTRIBUTION` skips v1 with that instruction instead of failing inside env-v1 |
+
+The twins are not free-standing copies: both import `trained_order` and `model_io`, so the parts
+that MUST agree across versions (the `feature_order` vocabulary, the loader ladder) are one
+definition, and only the genuinely env-bound half is duplicated.
+
+**Pattern C — analysis `.venv` only.** Opens no model; most import `config`.
+
+`config.py` · `schema.py` · `threshold.py` · `figstyle.py` · `detector/` · `estimator/` ·
+`mitigator/` · `pipeline/` · `loaders/` · `scoring/load_scores.py` · the `*_all.py` drivers ·
+`features/check_overlap.py` · `data/make_dummy_*.py`
+
+`loaders/version_data.py` reads `.pkl` but is still pattern C: those are pandas *data* pickles
+from `Z:`, not models. Opening a model there raises `ModuleNotFoundError: fttl_v1`.
+
+#### Which pattern for NEW work (added 2026-09-01)
+
+**Pattern A is a maintenance category, not a target.** The 3.5 floor exists for exactly one
+environment — env-v1, Python 3.5.6, a 2018 stack that cannot be rebuilt. v2 and v3 are already
+past it, and **every version after v3 arrives on Python ≥ 3.10**, since the attribution work from
+here on is on post-v3 data. So for anything written from now on, question 2 above ("must it run
+under v1?") answers **No** unless you are deliberately touching v1's own scoring or retraining
+path.
+
+That makes the default concrete:
+
+| Writing a new file that… | Pattern | What you may use |
+|---|---|---|
+| opens no model | **C** | ordinary modern Python, `import config`, parquet — the analysis `.venv` |
+| opens a model, v2/v3/v4+ only | **B**, shared half | ordinary modern Python; **no twin, no CSV branch, no ASCII restriction** |
+| opens a model **and v1 must run it** | **A** | the four disciplines above — and say so in the file header, as `retrain.py` and `predict.py` do |
+
+Only four files are in pattern A (`retrain.py`, `predict.py`, `trained_order.py`, `model_io.py`)
+and that list should not grow. They are there because v1 still has to be **scored** and
+**retrained** for the dissertation's cross-version comparison — not because new code should
+imitate them. Writing a new module to the 3.5 floor "to be safe" costs f-strings, real type
+syntax and parquet for a compatibility nobody will use.
+
+**When v4 lands**, the two legacy carve-outs must stay one-element lists:
+
+* `config.NO_PARQUET_ENVS` — envs with no parquet engine. v4 has one; do not add it.
+* `scoring/attribute_all.NO_HEADLESS_ATTRIBUTION` — versions this driver cannot launch. v4 runs
+  `attribute.py` unchanged; do not add it.
+
+If a future version ever *did* need a twin, that is the signal its env is wrong, not that the
+pattern should spread.
 
 ## Adding a New Model Version
 
@@ -748,5 +943,7 @@ When a new version (e.g., v4) arrives with different dependencies:
 3. Declare `paths.model` — v4's own production pickle is the baseline, loaded not refitted. (If v4 ever ships none, a baseline trainer has to be written back; `config.TRAINING_CONFIG` records each version's training call.)
 4. Nothing. `score_all.py` loops `config.VERSION_LABELS`, so registering v4 in config already added it
 5. Add `"v4": ".../detection/v4_scores.parquet"` to the `score_paths` dict in the analysis
+
+A v4 on Python ≥ 3.10 needs **no `_v1`-style twin and no CSV stage** — it is pattern B's shared half (or C), and neither `config.NO_PARQUET_ENVS` nor `attribute_all.NO_HEADLESS_ATTRIBUTION` should gain an entry. See § "Three patterns".
 
 No new class required. `predict.py`, `attribute.py`, `retrain.py` and `load_scores.py` are all version-agnostic and run unchanged — the active env plus the CLI args (`--model`, `--features`, `--labels`, `--version`) decide which version is trained, scored, or retrained.

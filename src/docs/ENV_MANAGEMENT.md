@@ -205,32 +205,12 @@ Five things about that file, each learned the hard way:
   corrupt the first line; `.pth` ignores lines starting with `#`, so the BOM lands somewhere
   harmless.
 
-### Verifying what a built env actually contains *(added 2026-08-10)*
+### Verifying what a built env actually contains *(added 2026-08-10; tool deleted 2026-08-31)*
 
-`src/envs/check_installed.py` reads a `pyproject.toml`'s declared dependencies and reports, for one
-or more venvs at once, which are present, at what version, and — via PEP 610 `direct_url.json` —
-which came from a git URL or a local path rather than an index. It only inspects; it never installs.
-
-```bash
-python src/envs/check_installed.py \
-    --pyproject model_repos/real/fttl-v3/pyproject.toml \
-    --venv model_repos/real/fttl-v3/.venv \
-    --venv src/envs/v3/.venv
-```
-
-Two venvs are worth passing together because a version repo cloned from Allianz brings **its own**
-`.venv`, built by whoever ran it in production, while `src/envs/v3/.venv` is the one built here from
-the pins. Where those two disagree, the production one is the reference — the pickle was written
-under it. The `--all` flag additionally lists packages installed but not declared, which is how an
-undeclared transitive import (the `pyodbc`-at-load-time class of problem, § v1) surfaces before it
-breaks an unpickle.
-
-The driving interpreter needs 3.11+ for `tomllib`; the inspected venvs can be any 3.8+, so the
-analysis `.venv` can audit env-v1 (3.5.6) without env-v1 running the script itself.
-
-Two limits, both deliberate: it parses dependency **names** only, not version specifiers (it reports
-what is installed rather than judging a constraint), and it resolves `[tool.uv.sources]` only —
-Poetry-style source tables are not read, since the version repos are uv/setuptools projects.
+`src/envs/check_installed.py` audited a `pyproject.toml`'s declared dependencies against one or
+more built venvs. It was never run on the company laptop and never committed, and it is deleted.
+Nothing replaced it: check an env by activating it and reading `uv pip list` / `uv pip show`
+against that version's pin table in this document.
 
 ---
 
@@ -239,10 +219,11 @@ Poetry-style source tables are not read, since the version repos are uv/setuptoo
 Each model version is scored **offline, inside its own env**, and the predictions are saved to disk. The analysis then reads the saved scores — no model is loaded in the analysis process, so the environments never meet. (This replaces the older `conda run -n <env>` form; the design rationale is unchanged.)
 
 ```bash
-# Standard envs — call each env's interpreter directly
-src/envs/v1/.venv/bin/python src/scoring/predict.py --model src/models/real/baseline/v1.pkl \
-    --features src/data/real/inputs/features_v1_test.parquet --version v1 \
-    --out src/data/real/detection/v1_scores_test.parquet
+# Standard envs — call each env's interpreter directly. env-v1 (py3.5) runs the frozen twin
+# predict_v1.py, and on CSV paths — env-v1 has no parquet engine (see the CSV stage below)
+src/envs/v1/.venv/bin/python src/scoring/predict_v1.py --model src/models/real/baseline/v1.pkl \
+    --features src/data/real/inputs/features_v1_test.csv --version v1 \
+    --out src/data/real/detection/v1_scores_test.csv
 
 # Stricter (project) envs — uv run --project selects that version's env
 uv run --project src/envs/v2 python src/scoring/predict.py --model src/models/real/baseline/v2.pkl \
@@ -259,9 +240,9 @@ paths themselves. See `STRUCTURE.md` § "Some kinds exist ONLY per split".
 
 **There is no baseline-training driver any more** (`train_all.py` deleted 2026-08-19; `train_all.sh` before it, 2026-07-31). It skipped any version whose `config.VERSIONS[v]["paths"]["model"]` is declared — and all three versions now declare one, so every run was a no-op. Its only remaining path, `--force`, resolved `--out-model` to the *declared* path and would have written over the real production pickle. The baseline on real data is each version's own pickle, **loaded, never refitted** — v1 permanently so, its training data having been destroyed. The baseline trainer `training/train.py` went with it the same day, for the same reason — with no version to train it had no caller left. `config.TRAINING_CONFIG` records each version's training call if a refit is ever needed. `training/retrain.py` (the MITIGATED retrainer) is the only trainer that remains, and `training/retrain_all.py` is its config-aware driver — the counterpart of `score_all.py`.
 
-**Why `retrain.py` takes paths instead of reading config.** env-v1 is **Python 3.5.6**, and `config.py` is 3.7+ (future annotations, `dict[str, ...]` variable annotations, ~50 f-strings) — a worker that imported it could not be *parsed* there, let alone run. So `retrain.py` is written to 3.5 (no f-strings, no future annotations, `.format()` throughout) and `retrain_all.py` resolves every path by KIND in the analysis `.venv` before handing over strings. ⚠️ `predict.py` and `attribute.py` have **not** been backported and still cannot run in env-v1.
+**Why `retrain.py` takes paths instead of reading config.** The workers are deliberately config-free: `retrain_all.py` / `score_all.py` resolve every path by KIND in the analysis `.venv` and hand over strings, and `notebook/real/mitigation/03_03_retrain.ipynb` resolves them through its own `import config` on the version kernel. **[2026-09-02]** `retrain.py` and `predict.py` are now MODERN (>=3.10) and importable — `retrain()` / `predict()` functions whose CLI mains wrap the same call — because the only envs that run them are env-v2/env-v3 (v1 is never retrained, and v1 scoring moved to `predict_v1.py`, the frozen py3.5 twin that keeps the old discipline: no f-strings, no config import, CSV I/O, ASCII console; `score_all.py` dispatches on `config.NO_PARQUET_ENVS`). ⚠️ `attribute.py` has no v1 twin and still cannot run in env-v1.
 
-**Re-training and preprocessing also run in the per-version env.** `src/training/retrain.py` (mitigated pkl, re-evaluation) and `src/preprocessing/v{1,2,3}.py` (build that version's `features_<v>.parquet`) are executed inside `env-v1`/`env-v2`/`env-v3` exactly like `predict.py` — because all load or build that version's model and so need its repo importable. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. The **log-ingestion** step (`log_source` → `logs/<v>.parquet`) lives in `notebook/real/01_export_v2.ipynb` since 2026-08-09 (`scoring/ingest.py` deleted — only v2 has a production log; the source is a version-bound pandas pickle, so it must be read inside env-v2 anyway). (`scoring/inspect_pickle.py` was DELETED 2026-08-19 — the one-off util that reported a prod pickle's schema and date range. The export notebooks `01_export_v{1,2,3}` now read every `Z:` source inside its own env and write canonical parquet, which is the same job done properly.) Note *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
+**Re-training and preprocessing also run in the per-version env.** `src/training/retrain.py` (mitigated pkl, re-evaluation; env-v2/v3 only — v1 is never retrained) and `src/preprocessing/v{1,2,3}.py` (build that version's `features_<v>.parquet`) are executed inside the per-version envs exactly like the scorers — because all load or build that version's model and so need its repo importable. So each per-version env is used for **preprocessing → (re)training → scoring**; only the analysis `.venv` never loads a model. The **log-ingestion** step (`log_source` → `logs/<v>.parquet`) lives in `notebook/real/01_export_v2.ipynb` since 2026-08-09 (`scoring/ingest.py` deleted — only v2 has a production log; the source is a version-bound pandas pickle, so it must be read inside env-v2 anyway). (`scoring/inspect_pickle.py` was DELETED 2026-08-19 — the one-off util that reported a prod pickle's schema and date range. The export notebooks `01_export_v{1,2,3}` now read every `Z:` source inside its own env and write canonical parquet, which is the same job done properly.) Note *preprocessing* (`src/preprocessing/v{1,2,3}.py`) is genuinely per-version — see `DESIGN.md` § "Where per-version code lives" and `STRUCTURE.md`.
 
 ### env-v1 has no parquet engine — the CSV stage *(recorded 2026-08-19)*
 
@@ -295,12 +276,11 @@ by re-reading the parquet's row count.
 > first; this one was brought into line afterwards. Deriving the names is what removes the class of
 > bug rather than one instance of it.
 
-**What this does NOT solve.** Having the parquet files does not let the version-layer *scripts* run
-inside env-v1: `scoring/predict.py` and `scoring/attribute.py` call `pd.read_parquet` /
-`to_parquet`, which need an engine env-v1 lacks — on top of their Python-3.5 syntax problem
-(`from __future__ import annotations`, f-strings, `str | None`; 3 and 21 occurrences respectively).
-Running either on v1 needs a 3.5 backport **and** CSV/pkl I/O branches. `training/retrain.py` was
-rewritten with both on 2026-08-19 and is the pattern to follow.
+**What this does NOT solve.** Having the parquet files does not by itself let the version-layer
+*scripts* run inside env-v1 — that needs 3.5 syntax **and** CSV/pkl I/O branches. Scoring got both
+(the 2026-09-01 backport, since split out as `scoring/predict_v1.py`, the frozen py3.5 twin —
+`predict.py` itself is modern v2/v3-only as of 2026-09-02, see above). `scoring/attribute.py` has
+had neither: it still cannot run in env-v1.
 
 ### `shap` belongs in the per-version envs too *(added 2026-07-14)*
 
