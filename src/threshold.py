@@ -37,31 +37,76 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import f1_score
 
 import config
 import schema
 
 
-def tune(y, scores, target: float = config.TARGET_PRECISION, fallback: float | None = None):
-    """Lowest cutoff whose precision >= target. Returns `fallback` if no cutoff reaches it.
+def tune(
+    y,
+    scores,
+    target: float | None = config.TARGET_PRECISION,
+    fallback: float | None = None,
+    *,
+    grid=None,
+    f1: bool = False,
+    recall_min: float | None = None,
+    recall_weight: float | None = None,
+) -> float | None:
+    """Choose tau on a grid — adapted from Allianz's own `select_best_threshold` (handed over
+    2026-09-02; this replaces the provisional project rule, which survives as the default mode).
 
-    The project's canonical rule, and only a FALLBACK for the real thing: a version repo's own
-    tuning logic wins where it exists. Tuning on data the model was fitted on is in-sample, lands
-    tau too low, and silently over-scraps — pass a held-out slice.
+    Mode precedence follows the company function:
+
+        f1=True           argmax of class-weighted F1 over the grid
+        recall_weight=w   argmax of  w*recall + (1-w)*precision
+        recall_min=r      HIGHEST grid point whose recall stays > r  (their constraint is strict)
+        (default)         LOWEST grid point whose precision >= target — the precision-floor rule
+                          (config.TARGET_PRECISION). The company signature carries `precision_min`
+                          for this but the body as received never read it; this branch fills that
+                          role and keeps our documented `>=`.
+
+    Two deliberate departures from the code as received: the weighted combination uses `+` (its
+    own comment says weighted AVERAGE of precision and recall — the received line multiplied,
+    which cancels the weight out of the argmax), and an unsatisfiable constraint returns
+    `fallback` instead of raising on an empty sequence.
+
+    `grid` defaults to every observed score (np.unique(scores)) — what this function scanned
+    before the handover; the company passes an explicit grid, and both work. The grid is sorted
+    and deduplicated, so LOWEST/HIGHEST above are well defined.
+
+    The decision is `score > t`, STRICT, matching apply(). Tuning on data the model was fitted
+    on is in-sample, lands tau too low, and silently over-scraps — pass a held-out slice.
     """
     y = np.asarray(y).astype(int)
     s = np.asarray(scores, dtype=float)
-    best = None
-    for t in np.unique(s):
+    thresholds = np.unique(s if grid is None else np.asarray(grid, dtype=float))
+
+    n_pos = int((y == 1).sum())
+    all_prec = np.zeros(len(thresholds))
+    all_recall = np.zeros(len(thresholds))
+    all_metric = np.zeros(len(thresholds))
+    for i, t in enumerate(thresholds):
         pred = s > t                     # STRICT, to match apply() — see the module docstring
         tp = int((pred & (y == 1)).sum())
         fp = int((pred & (y == 0)).sum())
-        if tp + fp == 0:
-            continue
-        if tp / (tp + fp) >= target:     # the PRECISION target is >= ; the score rule is >
-            best = float(t)
-            break
-    return best if best is not None else fallback
+        all_prec[i] = tp / (tp + fp) if tp + fp else 0.0   # == sklearn zero_division=0
+        all_recall[i] = tp / n_pos if n_pos else 0.0
+        if f1:
+            all_metric[i] = f1_score(y, pred.astype(int), average="weighted")
+        elif recall_weight is not None:
+            all_metric[i] = recall_weight * all_recall[i] + (1.0 - recall_weight) * all_prec[i]
+
+    if f1 or recall_weight is not None:
+        return float(thresholds[int(np.argmax(all_metric))])
+    if recall_min is not None:
+        ok = np.flatnonzero(all_recall > recall_min)       # strict, as received
+        return float(thresholds[ok.max()]) if ok.size else fallback
+    if target is None:
+        raise ValueError("no mode selected: give target, or one of f1 / recall_weight / recall_min")
+    ok = np.flatnonzero(all_prec >= target)  # the PRECISION floor is >= ; the score rule is >
+    return float(thresholds[ok.min()]) if ok.size else fallback
 
 
 def apply(version: str, df: pd.DataFrame, score_col: str = schema.SCORE) -> np.ndarray:
