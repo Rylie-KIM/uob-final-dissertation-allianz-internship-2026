@@ -7,8 +7,9 @@ Column names below are the CANONICAL ones (src/schema.py), already translated at
 
 THE CONTAMINATION, in PU vocabulary (Bekker & Davis 2020 — p28). Garaged claims (decision=0)
 carry a verified outcome: P (observed=1) / N (observed=0). Model-scrapped claims (decision=1)
-carry a FORCED observed=1 and no verification: U. Where IPSCorrector drops U and reweights what
-is left, this corrector KEEPS every row and changes how much each one is trusted.
+carry a FORCED observed=1 and no verification: U. Dropping U (the classic IPS route) would
+discard exactly the region the model acts on; this corrector KEEPS every row and changes how
+much each one is trusted.
 
 THE GRID. tau_i is the scrap cutoff in force for row i (see TAU below), h = band_h, and
 high_i := (score_i >= tau_i - h) — the boundary band [tau-h, tau) plus everything above it.
@@ -53,9 +54,9 @@ so `naive` and `transport` are byte-identical under either mode; only rarity / p
     tau_mode="fixed"    one scalar for every row: `tau` if given, else read off the frame
                         (threshold.read_off = min score among decision=1 — 03_02's applied_tau)
 
-WHICH COLUMNS g SEES: config.model_features(version), same rule and same reason as ips.py — the
-exported matrix carries the target beside the inputs, so "everything except claim_id" would fit
-g on the outcome it is trying to recover.
+WHICH COLUMNS g SEES: config.model_features(version) — the exported matrix carries the target
+beside the inputs, so "everything except claim_id" would fit g on the outcome it is trying to
+recover.
 
   PYTHONPATH=src .venv/bin/python -m mitigator.corrector.reweight --version v3 --scheme transport \
       --features src/data/real/inputs/features_v3_train.parquet \
@@ -133,9 +134,9 @@ class ReweightCorrector(TrainingDataCorrector):
     def _feature_cols(self, features: pd.DataFrame, given: list[str] | None) -> list[str]:
         """The model-input columns of `features` — supplied by the caller, never inferred.
 
-        Same refusal as IPSCorrector, same reason: the exported matrix carries the target
-        beside the inputs (v3's also its own predictions), so the silent fallback — every
-        column but claim_id — would fit g(x) on the outcome it is trying to recover.
+        The exported matrix carries the target beside the inputs (v3's also its own
+        predictions), so the silent fallback — every column but claim_id — would fit g(x)
+        on the outcome it is trying to recover.
         """
         if not given:
             raise ValueError(
