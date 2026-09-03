@@ -85,7 +85,7 @@ repo/
     │   └── logit_adjust.py        # notebook 04_03 — conditional odds ratio; falsify() FAILS by design
     ├── mitigator/            # "how do we fix it?"
     │   ├── sfp_mitigator.py
-    │   ├── corrector/             # TrainingDataCorrector ABC → IPSCorrector · ReweightCorrector
+    │   ├── corrector/             # TrainingDataCorrector ABC → ReweightCorrector
     │   │                          #   (03_02's naive/rarity/transport/pnu schemes, 2026-09-01;
     │   │                          #   transport/pnu emit DUPLICATED claim_ids — retrain.py's join
     │   │                          #   handles it)
@@ -215,7 +215,7 @@ repo/
             │   ├── v2.parquet         # kind `log`       — ONE ROW PER CLAIM, canonical names
             │   ├── v2_raw.parquet      # `log_raw`      ┐ one row per SCORING EVENT, keyed
             │   ├── v2_features.parquet # `log_features` │ (ClaimNumber, correlation_id).
-            │   ├── v2_score.parquet    # `log_scores`   │ NOT pre-joined — raw/features keep
+            │   ├── v2_scores.parquet   # `log_scores`   │ NOT pre-joined — raw/features keep
             │   └── v2_targets.parquet  # `log_targets`  ┘ v2's names, score/targets ours.
             ├── inputs/
             ├── detection/     # `scores`: <v>_scores_<split>.parquet, flat
@@ -249,7 +249,7 @@ repo/
 
 > **Note — log ingestion is the one name-translation point (added 2026-07-06; ~~manifest.json~~ → config, and the translation extended to COLUMNS, 2026-07-31).** Each model application emits its production log under whatever name IT chose, with whatever column names IT chose. `scoring/ingest.py` is the SINGLE place that translates both into ours: it reads `config.path("log_source", v)`, renames the columns via `schema.to_canonical`, checks the required ones survived (`schema.require`, which names the offending config entry when one did not), and writes `config.path("log", v)`. Everything downstream reads only the canonical log. `logs/manifest.json` is retired — the source path is now `paths.log_source` in config, so the file name and the column names are edited in the same one place.
 
-> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/predict.py`, `score_all.py`, `load_scores.py`; `ingest.py` and `build_inputs.py` were here then, deleted 2026-08-09 / 2026-08-19); the **training I/O** (`training/retrain.py` = mitigated retrainer; the baseline trainer `train.py` and its `train_all.py` driver were here then, both deleted 2026-08-19); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
+> **Reality vs target (OO layers built 2026-07-04).** The reorg **and** the Analysis-Layer class hierarchy are **done and verified** — `src/pipeline/pipeline.py` (`SFPPipeline`) runs the full synthetic chain end-to-end (detect → mitigate → re-eval for v1/v2/v3), identical results to the retired procedural `run_cycle.py`. On disk and working: `src/config.py`; the design docs under `src/docs/`; the per-version envs at **`src/envs/v{1,2,3}/`**; the source→stage data tree **`src/data/synthetic/{inputs,detection,mitigation,reeval}/`**; all pkls at **`src/models/synthetic/{baseline,mitigated}/v{1,2,3}.pkl`**; the **Analysis-Layer OO impl** — `pipeline/pipeline.py` (`SFPPipeline`), `detector/sfp_detector.py` (`SFPDetector`) + `detector/algorithm/` (`DetectionAlgorithm` ABC → `ResidualPeakAlgorithm`), `mitigator/sfp_mitigator.py` (`SFPMitigator`) + `mitigator/corrector/` (`TrainingDataCorrector` ABC → `IPSCorrector`, deleted 2026-09-03 — `ReweightCorrector` is the thesis corrector) + `mitigator/policy/` (`InvestigationPolicy` ABC); the scoring I/O (`scoring/predict.py`, `score_all.py`, `load_scores.py`; `ingest.py` and `build_inputs.py` were here then, deleted 2026-08-09 / 2026-08-19); the **training I/O** (`training/retrain.py` = mitigated retrainer; the baseline trainer `train.py` and its `train_all.py` driver were here then, both deleted 2026-08-19); the canonical **log-ingestion landing zone** `data/synthetic/logs/` (`manifest.json` + `<v>.parquet`); the `src/data/synthetic/` generator tree; and the **working practice repos** `model_repos/practice/fttl-v{1,2,3}/` (code-only — pkls moved out). Still **design-only**: `preprocessing/`, `training/spec.py`, `loaders/`, concrete `InvestigationPolicy` impls, and the whole `data/real/` + `models/real/` side (arrive with the real version repos). The repo-root `pyproject.toml` + `uv.lock` + `.python-version` are the **uv-managed analysis env** (`.venv`, py3.11 — `uv sync`). `xgboost` needs system OpenMP (`brew install libomp`). The entry point is `src/pipeline/pipeline.py`; there is no `src/main.py`.
 
 > **Per-version features, built through each version's own repo (both sources).** Each version is scored on its own `inputs/features_<v>.parquet`, produced by **that version's repo preprocessing** — the `preprocessing/v{1,2,3}.py` adapters run each repo's feature builder. This is now **identical for synthetic and real** (decided 2026-07-03): synthetic is only a temporary stand-in, so it goes through the *same* external-repo path, not a special shared recipe. The single difference is where the raw claims come from — synthetic **generates** them (`data/synthetic/` DGP), real **receives** them from Allianz. Because v1/v2/v3 preprocessing genuinely diverges (`V2/V3FeatureBuilder`; `problem.md` §2.5 #10/#11), `features_<v>` files differ across versions on **both** sources. See `DESIGN.md` § "Per-version feature matrices". **This invariant is load-bearing and must be kept** — see § "What synthetic cannot rehearse" below.
 
@@ -344,8 +344,9 @@ booster first and the registry second, and refuse rather than guess when neither
 imported by `training/retrain.py` and `scoring/predict.py` alike, so fitting and scoring cannot
 pick different columns; `notebook/real/00_SHAP.ipynb` §2 reaches it through `shap_kit`. A process
 that cannot open the pickle at all asks `config.model_features(v)`, which reads the same registry
-— that is the analysis-env route, and `mitigator/corrector/ips.py` takes it (its propensity model
-was being fitted on every column but `claim_id`, i.e. on the outcome it exists to correct for).
+— that is the analysis-env route, and `mitigator/corrector/reweight.py` takes it (its transport
+model g(x) would otherwise be fitted on every column but `claim_id`, i.e. on the outcome it
+exists to recover).
 `scoring/predict.py` had the same `drop(columns=["claim_id"])` bug and now selects by trained
 name, which fixes the column ORDER at the same time: xgboost matches positionally when names are
 absent and raises `feature_names mismatch` when they are present, so a reordered frame is either
@@ -467,7 +468,7 @@ what the model actually consumed, so the export **splits it by column**. Two tra
 |---|---|---|---|
 | `log_raw` | `logs/v2_raw.parquet` | scoring event | keys + every column that is neither a model feature nor a prediction, v2's own names |
 | `log_features` | `logs/v2_features.parquet` | scoring event | both keys + `param.py` `MODEL_FEATURES` in fit order (that order is only knowable inside env-v2, so the file carries it) |
-| `log_scores` | `logs/v2_score.parquet` | scoring event | both keys + `score` · `decision` (canonical) |
+| `log_scores` | `logs/v2_scores.parquet` | scoring event | both keys + `score` · `decision` (canonical) |
 | `log_targets` | `logs/v2_targets.parquet` | scoring event | both keys + `date` · `observed` (canonical; `observed` is the v3 extract's `Fttl`) |
 | `log` | `logs/v2.parquet` | **claim** | `claim_id · date · score · decision · observed` |
 
@@ -656,7 +657,7 @@ real corrector removes it and the same estimator watches. The tool is reused ver
 what "`reeval/` composes the estimators over two artefact sets" means. Two cautions, both mechanical
 consequences of what it is: (i) it is a DiD, so `falsify()` (the parallel-trends probe) **must re-run on
 the mitigated pair** — the ABC makes that automatic; (ii) the mitigated models are trained on
-IPS-corrected data that is **empty above τ**, so `footprint_after`'s partition B rests on extrapolation
+corrected data whose labels above τ are **transported (g(x)), never verified**, so `footprint_after`'s partition B rests on extrapolation
 — report the same "rows above τ" diagnostic beside it.
 
 ## τ has two sources, and only one of them is tuned
