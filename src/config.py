@@ -195,7 +195,7 @@ FALLBACK: dict[str, str | None] = {
     "log":              "src/data/{source}/logs/{v}.parquet",
     "log_raw":          "src/data/{source}/logs/{v}_raw.parquet",
     "log_features":     "src/data/{source}/logs/{v}_features.parquet",
-    "log_scores":       "src/data/{source}/logs/{v}_score.parquet",
+    "log_scores":       "src/data/{source}/logs/{v}_scores.parquet",
     "log_targets":      "src/data/{source}/logs/{v}_targets.parquet",
     "processed_inputs": "src/data/{source}/inputs/features_{v}.parquet",   # filename kept: docs
                                                                            #   reference it
@@ -451,6 +451,9 @@ def repo(version: str) -> pathlib.Path:
     return MODEL_REPOS / _require(version, "repo_dir")
 
 
+SOURCES = ("real", "synthetic")   # the only values path()'s `source` accepts
+
+
 def path(kind: str, version: str, source: str = "real", split: str | None = None) -> pathlib.Path:
     """Resolve an artefact by KIND, never by filename.
 
@@ -466,6 +469,14 @@ def path(kind: str, version: str, source: str = "real", split: str | None = None
     """
     if kind not in KINDS:
         raise KeyError(f"unknown kind {kind!r}; expected one of {KINDS}")
+    if source not in SOURCES:
+        # The classic mistake: path(kind, version, "train") — the third POSITIONAL argument is
+        # source, so the split silently becomes None and the error below would blame the kind.
+        raise ValueError(
+            f"source={source!r} is not one of {SOURCES}. path()'s third positional argument "
+            f"is SOURCE, not split — pass split={source!r} by keyword, or call "
+            f"split_path({kind!r}, {version!r}, {source!r})."
+        )
 
     if kind in SPLIT_KINDS and split is None:
         raise ValueError(
