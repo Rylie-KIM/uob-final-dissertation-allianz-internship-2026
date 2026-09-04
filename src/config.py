@@ -879,7 +879,7 @@ def breaks(version: str) -> list[dict]:
     ]
 
 
-def spans_a_break(version: str, start, end) -> list[dict]:
+def spans_a_break(version: str, start: str, end:str) -> list[dict]:
     """The breaks strictly inside [start, end) — empty means that window is policy-homogeneous.
 
     The question every training/OOT window has to answer before it is called single-regime.

@@ -177,7 +177,10 @@ class ReweightCorrector(TrainingDataCorrector):
         if getattr(d.dt, "tz", None) is not None:
             d = d.dt.tz_localize(None)          # wall clock, matching threshold.apply()
         days = d.dt.normalize()
-        lut = {day: config.threshold_on(self.decider, str(day.date())) for day in days.unique()}
+        # pd.Timestamp(day): unique() on a tz-NAIVE datetime column returns numpy datetime64
+        # on some pandas versions, and only Timestamp has .date()
+        lut = {day: config.threshold_on(self.decider, str(pd.Timestamp(day).date()))
+               for day in days.unique()}
         return days.map(lut).to_numpy(dtype=float)
 
     def _rarity(self, cell: np.ndarray) -> dict:
