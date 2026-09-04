@@ -398,7 +398,15 @@ VERSIONS: dict[str, dict] = {
             "raw_dataset": None,
         },
         "columns": {
-            "claim_id": "ID_CLAIM",    # `project_params.KEY` in the repo — read the actual string
+            # The BUSINESS claim number — the same field v2's clean_dataset and the v2 serving log
+            # key on, so cross-version joins work. NOT the repo's `project_params.KEY` (`ID_CLAIM`,
+            # a database row id): the first export used that, and every join onto a v3 file
+            # (03_01, 02_error_inheritance v2->v3) compared two unrelated integer sequences.
+            # Corrected 2026-09-03; the files already on disk were re-keyed in place (join onto
+            # raw_v3's Claimnumber_CLAIM, old id dropped — see notebook/scratch). ID_CLAIM
+            # survives under its own name in raw_v3 (and in features_v3 when the transformed
+            # file carries it) — the bridge, if one is needed again.
+            "claim_id": "Claimnumber_CLAIM",
             # Same underlying field as v2's ReportedDate, renamed (confirmed 2026-07-29).
             "date": "ReportedDate_CLAIM",
             # TRAIN-TIME score, saved as a column inside the Z: transformed data (confirmed
