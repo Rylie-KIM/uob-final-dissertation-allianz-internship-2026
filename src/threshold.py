@@ -46,7 +46,7 @@ import schema
 def tune(
     y,
     scores,
-    target: float | None = config.TARGET_PRECISION,
+    target_precision: float | None = config.TARGET_PRECISION,
     fallback: float | None = None,
     *,
     grid=None,
@@ -62,10 +62,11 @@ def tune(
         f1=True           argmax of class-weighted F1 over the grid
         recall_weight=w   argmax of  w*recall + (1-w)*precision
         recall_min=r      HIGHEST grid point whose recall stays > r  (their constraint is strict)
-        (default)         LOWEST grid point whose precision >= target — the precision-floor rule
-                          (config.TARGET_PRECISION). The company signature carries `precision_min`
-                          for this but the body as received never read it; this branch fills that
-                          role and keeps our documented `>=`.
+        (default)         LOWEST grid point whose precision >= target_precision — the
+                          precision-floor rule (config.TARGET_PRECISION). The name is the GOAL
+                          precision, never the target variable: the labels are `y`. The company
+                          signature carries `precision_min` for this but the body as received
+                          never read it; this branch fills that role and keeps our documented `>=`.
 
     Two deliberate departures from the code as received: the weighted combination uses `+` (its
     own comment says weighted AVERAGE of precision and recall — the received line multiplied,
@@ -103,9 +104,12 @@ def tune(
     if recall_min is not None:
         ok = np.flatnonzero(all_recall > recall_min)       # strict, as received
         return float(thresholds[ok.max()]) if ok.size else fallback
-    if target is None:
-        raise ValueError("no mode selected: give target, or one of f1 / recall_weight / recall_min")
-    ok = np.flatnonzero(all_prec >= target)  # the PRECISION floor is >= ; the score rule is >
+    if target_precision is None:
+        raise ValueError(
+            "no mode selected: give target_precision, or one of f1 / recall_weight / recall_min"
+        )
+    # the PRECISION floor is >= ; the score rule is >
+    ok = np.flatnonzero(all_prec >= target_precision)
     return float(thresholds[ok.min()]) if ok.size else fallback
 
 
