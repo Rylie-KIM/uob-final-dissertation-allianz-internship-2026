@@ -321,6 +321,27 @@ class Attribution(object):
         return Attribution(self.phi[mask], self.base[mask], self.X.loc[mask],
                            self.backend, self.perturbation, self.note)
 
+    def relabel(self, mapping: dict) -> "Attribution":
+        """A copy with feature columns renamed through `mapping` (real name -> alias, typically).
+
+        Every plot/table in this module reads names off `.features` / `.X.columns` — never a
+        second, independently-ordered list — so renaming `.X`'s columns (order preserved, `phi` is
+        positional and untouched) is the one seam feature aliasing needs; `plot_bar`,
+        `plot_beeswarm`, `plot_dependence`, `plot_waterfall`, `plot_force`, `plot_band_bars` and
+        `explanation()` all inherit it for free. Strict on purpose: a feature missing from
+        `mapping` raises rather than passing the real name through onto a figure unchanged (same
+        rule as `feature_alias.to_alias`).
+        """
+        missing = [f for f in self.features if f not in mapping]
+        if missing:
+            raise KeyError(
+                f"{len(missing)} feature(s) not in the alias mapping (first 5: {missing[:5]}) — "
+                f"rebuild features/build_feature_alias.py; a silent passthrough here would leak "
+                f"real names onto a figure."
+            )
+        return Attribution(self.phi, self.base, self.X.rename(columns=mapping),
+                           self.backend, self.perturbation, self.note)
+
 
 def compute(est, X: pd.DataFrame, background=None, backend: str = "auto") -> Attribution:
     """TreeSHAP for `est` on `X`. Prefers shap+background, falls back to the booster itself.
