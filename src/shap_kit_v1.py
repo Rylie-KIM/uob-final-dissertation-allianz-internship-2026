@@ -198,6 +198,20 @@ def save(fig, name):
     return png
 
 
+def save_table(df, name) -> str:
+    """Write a DataFrame (index kept -- it is normally the feature name) to figures/<name>.csv.
+
+    The CSV twin of save(): same directory, same naming convention, so a table that backs a
+    figure (SHAP importance, association) can be kept in FULL -- not just the head() a notebook
+    prints -- under the same real-name / alias_-prefixed pairing as the figure itself.
+    """
+    if not os.path.isdir(FIG_DIR):
+        os.makedirs(FIG_DIR)
+    path = os.path.join(FIG_DIR, name + ".csv")
+    df.to_csv(path)
+    return path
+
+
 def env_report(strict=True):
     info = OrderedDict([("version", VERSION),
                         ("python", sys.version.split()[0]),
