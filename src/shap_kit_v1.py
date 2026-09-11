@@ -60,6 +60,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 FIG_DIR = os.path.join(ROOT, "figures")
 REGISTRY_PATH = os.path.join(ROOT, "features", "registry", "v1.json")
+ALIAS_MAP_PATH = os.path.join(ROOT, "features", "registry", "feature_alias_map.json")
 
 
 def features_csv_path(split):
@@ -116,6 +117,28 @@ def registry_features():
     if not trained:
         raise RuntimeError("{} has no `model_features`".format(REGISTRY_PATH))
     return trained
+
+
+def load_alias_map() -> dict:
+    """v1's real feature name -> anonymised alias ("v1_feat_01", ...).
+
+    The plain-json equivalent of feature_alias.load_version("v1") (src/feature_alias.py, which
+    shap_kit.py's v2/v3 notebook imports directly) -- env-v1 cannot import that module (3.7+
+    syntax: `from __future__ import annotations`, f-strings), so this reads the SAME combined
+    file (features/registry/feature_alias_map.json, built once on the company laptop by
+    features/build_feature_alias.py, never reaching git) with nothing but stdlib json.
+    """
+    if not os.path.exists(ALIAS_MAP_PATH):
+        raise RuntimeError(
+            "{} does not exist. Build it (analysis .venv, not this env):\n"
+            "    uv run python features/build_feature_alias.py".format(ALIAS_MAP_PATH))
+    with open(ALIAS_MAP_PATH, encoding="utf-8") as fh:
+        payload = json.load(fh)
+    if "v1" not in payload:
+        raise RuntimeError(
+            "{} has no entry for 'v1' (has: {}). Rebuild features/build_feature_alias.py once "
+            "v1's registry exists.".format(ALIAS_MAP_PATH, ", ".join(payload) or "nothing"))
+    return payload["v1"]["real_to_alias"]
 
 
 def registry_features_source():
@@ -297,6 +320,25 @@ class Attribution(object):
     def subset(self, mask):
         mask = np.asarray(mask)
         return Attribution(self.phi[mask], self.base[mask], self.X.loc[mask],
+                           self.backend, self.perturbation, self.note)
+
+    def relabel(self, mapping) -> "Attribution":
+        """A copy with feature columns renamed through `mapping` (real name -> alias, typically).
+
+        Every plot/table in this module reads names off `.features` / `.X.columns`, so renaming
+        `.X`'s columns (order preserved, `phi` is positional and untouched) is the one seam
+        feature aliasing needs -- plot_bar, plot_beeswarm, plot_dependence, plot_waterfall,
+        plot_force and plot_band_bars all inherit it for free. Strict on purpose: a feature
+        missing from `mapping` raises rather than passing the real name through onto a figure
+        unchanged -- same rule as shap_kit.py's twin and feature_alias.to_alias.
+        """
+        missing = [f for f in self.features if f not in mapping]
+        if missing:
+            raise KeyError(
+                "{} feature(s) not in the alias mapping (first 5: {}) -- rebuild "
+                "features/build_feature_alias.py; a silent passthrough here would leak real "
+                "names onto a figure.".format(len(missing), missing[:5]))
+        return Attribution(self.phi, self.base, self.X.rename(columns=mapping),
                            self.backend, self.perturbation, self.note)
 
 
