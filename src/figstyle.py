@@ -129,3 +129,16 @@ def save(fig, name: str) -> Path:
     png = FIG_DIR / f"{name}.png"
     fig.savefig(png)
     return png
+
+
+def save_table(df, name: str) -> Path:
+    """Save ``df`` to ``figures/<name>.csv``, index kept (normally the feature name).
+
+    The CSV twin of ``save()`` — same directory, same naming convention — for a table that
+    backs a figure (SHAP importance, association) and is worth keeping in FULL, not just the
+    ``head()`` a notebook prints.
+    """
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    csv = FIG_DIR / f"{name}.csv"
+    df.to_csv(csv)
+    return csv
