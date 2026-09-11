@@ -132,6 +132,10 @@ WRITE_KINDS = (
     "corrected",      # de-contaminated target              <- mitigator/
     "mitigated",      # model retrained on corrected target
     "reeval_scores",  # scores from the mitigated model     -> reeval/
+    "shap_did_input",  # per-claim SHAP concentration + region (A/B, strict > tau) + era
+                       #   (early/late within that version's window), derived from "attributions".
+                       #   Build 04-01's own version of "corrector_targets": one artefact per
+                       #   (version, split), read by 04-02's estimator, never computed inline there.
 )
 
 KINDS = READ_KINDS + WRITE_KINDS
@@ -178,7 +182,8 @@ SPLIT_KINDS = (
     "corrector_targets",  # │
     "corrected",          # │
     "mitigated",          # │
-    "reeval_scores",      # ┘
+    "reeval_scores",      # │
+    "shap_did_input",     # ┘
 )
 
 # Fallback location for a kind that is NOT declared for a version. Relative to ROOT.
@@ -230,6 +235,7 @@ FALLBACK: dict[str, str | None] = {
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
     "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
+    "shap_did_input": "src/data/{source}/detection/shap_did/{v}/{v}_shap_did_input.parquet",
 }
 
 
@@ -722,6 +728,19 @@ def model_features(version: str) -> list[str]:
     return [str(n) for n in names]
 
 
+def alias_map_path() -> pathlib.Path:
+    """features/registry/feature_alias_map.json — real name -> anonymised alias, all versions.
+
+    A PATH resolver only, like ``registry_path`` above: this file is built by
+    ``features/build_feature_alias.py`` from ``model_features(version)``, never hand-written.
+    It exists because figures that go in the (NDA-bound) thesis must not print real Allianz
+    column names — ``src/feature_alias.py`` reads it to rename axes/legends before plotting.
+    Same one-way-sync reasoning as the registry itself: covered by ``features/registry/*.json``
+    in .gitignore, so it never leaves the company laptop.
+    """
+    return FEATURE_REGISTRY / "feature_alias_map.json"
+
+
 def rename_map(version: str) -> dict[str, str]:
     """THEIR name -> OUR name, ready for ``df.rename(columns=...)`` at ingest.
 
@@ -830,16 +849,14 @@ def regime_on(version: str, date) -> dict:
     regimes and two of them share a threshold, so `regimes[0]` is not "the documented tau" and
     `regimes[-1]` is only "the tau in force today".
     """
-    import datetime as _dt
-
     rule = _decision_rule(version)
     if rule["shape"] != "piecewise_global":
         raise ValueError(f"[{version}] rule shape is {rule['shape']!r}, not piecewise_global")
-    d = _dt.date.fromisoformat(str(date)[:10])
+    d = _as_date(date)
     for regime in rule["regimes"]:
-        if "from" in regime and d < _dt.date.fromisoformat(regime["from"]):
+        if "from" in regime and d < _as_date(regime["from"]):
             continue
-        if "until" in regime and d >= _dt.date.fromisoformat(regime["until"]):
+        if "until" in regime and d >= _as_date(regime["until"]):
             continue
         return regime
     raise ValueError(
@@ -879,19 +896,28 @@ def breaks(version: str) -> list[dict]:
     ]
 
 
-def spans_a_break(version: str, start: str, end:str) -> list[dict]:
+def spans_a_break(version: str, start, end) -> list[dict]:
     """The breaks strictly inside [start, end) — empty means that window is policy-homogeneous.
 
     The question every training/OOT window has to answer before it is called single-regime.
+    `start`/`end` take anything _as_date accepts (ISO string, date, Timestamp).
+    """
+    a, b = _as_date(start), _as_date(end)
+    return [brk for brk in breaks(version) if a < _as_date(brk["date"]) < b]
+
+def _as_date(x) -> "datetime.date":
+    """Whole-day value of x — ISO string, date, datetime / pd.Timestamp, or numpy datetime64.
+
+    Every date comparison in this module goes through here so both sides are ALWAYS
+    datetime.date: comparing a raw "YYYY-MM-DD" string against a date raises TypeError.
     """
     import datetime as _dt
 
-    a = _dt.date.fromisoformat(str(start)[:10])
-    b = _dt.date.fromisoformat(str(end)[:10])
-    return [
-        brk for brk in breaks(version)
-        if a < _dt.date.fromisoformat(brk["date"]) < b
-    ]
+    if isinstance(x, _dt.datetime):        # pd.Timestamp is a datetime subclass
+        return x.date()
+    if isinstance(x, _dt.date):
+        return x
+    return _dt.date.fromisoformat(str(x)[:10])   # "2024-06-02", "2024-06-02T00:00:00", ...
 
 
 def _decision_rule(version: str) -> dict:
