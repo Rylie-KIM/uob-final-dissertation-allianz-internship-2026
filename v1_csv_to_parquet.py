@@ -10,6 +10,10 @@ nothing else, and neither pyarrow nor fastparquet can be added on Python 3.5.6. 
 `notebook/real/01_export_v1.ipynb` writes **CSV**, and this script converts it where an engine
 exists. v2 and v3 have modern envs and write parquet directly; this is a v1-only stage.
 
+**Also covers `00_SHAP_v1.ipynb`'s attributions CSVs** (added 2026-09-12) —
+`detection/shap/v1/v1_attributions_<split>[_native].csv` — for the same reason: `shap_kit_v1`
+has no parquet engine either. Their sidecar `_meta.json` is already JSON and needs no conversion.
+
 PATHS COME FROM `config`, NEVER FROM A LIST HERE. The destination is whatever
 `config.path(kind, "v1", split=...)` resolves to and the source is that same path with a `.csv`
 suffix — which is exactly the naming `01_export_v1.ipynb` mirrors. An earlier version of this file
@@ -77,6 +81,28 @@ def convert(csv_path: pathlib.Path, parquet_path: pathlib.Path, dry_run: bool) -
     return len(df), df.shape[1]
 
 
+def attribution_jobs(splits: list[str], source: str) -> list[tuple[str, pathlib.Path, pathlib.Path]]:
+    """(label, csv, parquet) for every v1 attributions CSV actually on disk, restricted to
+    `splits` like every other job here.
+
+    Attributions don't fit the SPLIT_KINDS loop below: `00_SHAP_v1.ipynb` names them
+    `v1_attributions_<split>[_native].csv` in the SAME "attributions" directory
+    `config.path("attributions", "v1", source, split=...)` resolves to, but writes CSV
+    (`shap_kit_v1.attributions_csv_path`) because env-v1 has no parquet engine — the notebook's
+    own last cell prints "v1_csv_to_parquet.py does NOT cover detection/shap/" and hands back
+    one-liner conversions as a stopgap. This globs whatever CSVs actually exist (per requested
+    split) instead of hand-listing suffix combinations, since which backends were run varies by
+    machine. The sidecar `_meta.json` next to each CSV is already JSON — it sits at the same
+    stem the parquet will use, so nothing else needs to touch it.
+    """
+    attrs_dir = config.path("attributions", VERSION, source, split=config.SPLITS[VERSION][0]).parent
+    out = []
+    for split in splits:
+        for csv_path in sorted(attrs_dir.glob(f"{VERSION}_attributions_{split}*.csv")):
+            out.append((f"attributions/{csv_path.stem}", csv_path, csv_path.with_suffix(".parquet")))
+    return out
+
+
 def jobs(splits: list[str], source: str) -> list[tuple[str, pathlib.Path, pathlib.Path]]:
     """(label, csv, parquet) for every artefact, derived from config — never hand-listed."""
     out = []
@@ -87,6 +113,7 @@ def jobs(splits: list[str], source: str) -> list[tuple[str, pathlib.Path, pathli
     for kind in SINGLE_KINDS:
         dst = config.path(kind, VERSION, source)
         out.append((kind, dst.with_suffix(".csv"), dst))
+    out.extend(attribution_jobs(splits, source))
     return out
 
 
