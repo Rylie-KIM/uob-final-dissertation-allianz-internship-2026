@@ -136,6 +136,14 @@ WRITE_KINDS = (
                        #   (early/late within that version's window), derived from "attributions".
                        #   Build 04-01's own version of "corrector_targets": one artefact per
                        #   (version, split), read by 04-02's estimator, never computed inline there.
+    "mitigated_attributions",  # per-row SHAP values for the RETRAINED/corrected model — the
+                       #   "after" arm of 04-03's ShapDiDDelta. A dedicated kind (not the
+                       #   "attributions" kind plus an out-suffix) because it belongs to the
+                       #   mitigation pipeline's own artefact family (alongside "corrected" /
+                       #   "mitigated" / "reeval_scores"), not to the baseline SHAP directory.
+                       #   Built by re-running notebook/real/00_SHAP.ipynb with
+                       #   MODEL_PATH = config.path("mitigated", v, source) — nothing else does
+                       #   this yet (2026-09-12).
 )
 
 KINDS = READ_KINDS + WRITE_KINDS
@@ -183,7 +191,8 @@ SPLIT_KINDS = (
     "corrected",          # │
     "mitigated",          # │
     "reeval_scores",      # │
-    "shap_did_input",     # ┘
+    "shap_did_input",     # │
+    "mitigated_attributions",  # ┘
 )
 
 # Fallback location for a kind that is NOT declared for a version. Relative to ROOT.
@@ -236,6 +245,12 @@ FALLBACK: dict[str, str | None] = {
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
     "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
     "shap_did_input": "src/data/{source}/detection/shap_did/{v}/{v}_shap_did_input.parquet",
+    "mitigated_attributions": "src/data/{source}/mitigation/shap/{v}_mitigated_attributions.parquet",
+                     # same "template is not the whole filename" caveat as "attributions": split
+                     # is appended by path()'s generic SPLIT_KINDS step, and a backend suffix (if
+                     # ever needed) would be appended by the caller the same way attribute_all.py
+                     # does for "_native". No per-version directory here (unlike "attributions")
+                     # because there is no multi-backend fan-out planned for this kind yet.
 }
 
 
