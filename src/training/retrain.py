@@ -114,6 +114,17 @@ def retrain(
 
     # clone() copies the baseline estimator's hyperparameters and nothing else (unfitted), so the
     # mitigated model differs from the baseline in its TARGET alone — never in its configuration.
+    # That includes random_state: both real baselines have stochastic tree-building
+    # (v2 colsample_bytree=0.6, v3 colsample_bytree=0.887/subsample=0.980 — config.TRAINING_CONFIG),
+    # so this fit is reproducible ONLY because clone() also copies a fixed random_state (v2=42,
+    # v3=123 per TRAINING_CONFIG). If the loaded pickle's own random_state is unset, every rerun of
+    # this function silently produces a DIFFERENT mitigated model — surfaced here, not assumed away.
+    baseline_seed = base.get_params().get("random_state")
+    if baseline_seed is None:
+        print(f"  WARNING: baseline {type(base).__name__} has random_state=None — cloning it "
+              f"gives the retrain NO fixed seed, so repeated runs of this exact call will not "
+              f"reproduce the same mitigated model bit-for-bit (tree-building here is stochastic: "
+              f"see colsample_bytree/subsample in config.TRAINING_CONFIG[{version!r}]).")
     model = clone(base)
     model.fit(df[feats], df[label_col], sample_weight=w)
 
@@ -129,6 +140,7 @@ def retrain(
         "baseline": str(baseline),
         "features": str(features),
         "labels": str(labels),
+        "random_state": baseline_seed,   # None here means this fit is NOT reproducible (see WARNING above)
         "n_rows": int(len(df)),
         "n_features": len(feats),
         "feature_selection": how,
