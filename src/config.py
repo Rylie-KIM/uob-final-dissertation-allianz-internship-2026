@@ -244,7 +244,11 @@ FALLBACK: dict[str, str | None] = {
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
     "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
-    "shap_did_input": "src/data/{source}/detection/shap_did/{v}/{v}_shap_did_input.parquet",
+    "shap_did_input": "src/data/{source}/estimation/shap_did/{v}/{v}_shap_did_input.parquet",
+                     # "estimation/", not "detection/": this feeds src/estimator/concentration.py
+                     # (the SHAP-DiD region x era tags for Build 04's DiD estimate), never
+                     # src/detector/ (Build 02's SFPDetector) — the two packages' own artefact
+                     # families should not share a directory just because both are SHAP-derived.
     "mitigated_attributions": "src/data/{source}/mitigation/shap/{v}_mitigated_attributions.parquet",
                      # same "template is not the whole filename" caveat as "attributions": split
                      # is appended by path()'s generic SPLIT_KINDS step, and a backend suffix (if
