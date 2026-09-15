@@ -204,11 +204,33 @@ class VersionData:
 
     @cached_property
     def decisions(self):
-        """This version's OWN rule applied to its scores — segmented / piecewise / global."""
-        df = self.frame
-        if self.version == "v1" and schema.MOBILITY in self.log.columns:
-            df = df.merge(self.log[[schema.CLAIM_ID, schema.MOBILITY]], on=schema.CLAIM_ID)
-        return threshold.apply(self.version, df, score_col=self.score_col)
+        """This version's OWN rule applied to its scores — segmented / piecewise / global.
+
+        v1's rule is segmented on mobility, but mobility is unrecoverable for v1: it is absent
+        from both the raw dataset (confirmed 2026-08-27) and the production log, which does not
+        exist at all for v1 (destroyed — there is no `log` kind to merge it from; `self.log`
+        would raise FileNotFoundError before `threshold.apply`'s own missing-column check ever
+        ran). The documented stand-in is the HIGHER of the two segment thresholds (score > 0.85):
+        every row this calls "scrapped" the real segmented rule would have too, so the only rows
+        this cannot resolve are the ones in the (0.75, 0.85] overlap band — a permanent, documented
+        limitation (see DATA_MODEL.md), not something this loader can silently fix by guessing.
+        """
+        if self.version == "v1":
+            # FALLBACK, NOT the real rule. v1's ACTUAL decision rule is SEGMENTED on mobility
+            # (config.DECISION_RULES["v1"]: 0.75 immobile / 0.85 mobile) -- but mobility cannot
+            # be recovered here (see docstring above), so this treats 0.85, the HIGHER of the
+            # two, as a SINGLE GLOBAL threshold for every v1 row regardless of mobility:
+            #   score > 0.85 -> 1 (scrapped)
+            #   score <= 0.85 -> 0 (garaged) -- this also swallows the (0.75, 0.85] overlap band
+            #   as 0, undercounting the immobile scraps that band actually contains (docstring
+            #   has the full error table: no false positives anywhere, false negatives ONLY in
+            #   that band).
+            tau = max(config.DECISION_RULES["v1"]["thresholds"].values())   # = 0.85
+            print(f"[v1] decisions: FALLBACK single threshold {tau} in use -- real rule is "
+                  f"mobility-segmented (0.75 immobile / 0.85 mobile), mobility is unrecoverable "
+                  f"for v1, see this property's docstring / DATA_MODEL.md")
+            return (self.frame[self.score_col].to_numpy(dtype=float) > tau).astype(int)
+        return threshold.apply(self.version, self.frame, score_col=self.score_col)
 
 
 def load(version: str, source: str = "real", split: str | None = None) -> VersionData:
