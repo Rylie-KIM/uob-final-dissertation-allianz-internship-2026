@@ -163,9 +163,9 @@ class VersionData:
         if not meta.exists():
             raise FileNotFoundError(
                 f"[{self.version}] attributions exist but {meta.name} does not. Re-run "
-                f"src/scoring/attribute_all.py --split {split} — without the meta there is no "
-                f"record of which SHAP backend produced these numbers, and versions must not be "
-                f"compared blind."
+                f"src/scoring/attribute.py for {self.version} --split {split} — without the meta "
+                f"there is no record of which SHAP backend produced these numbers, and versions "
+                f"must not be compared blind."
             )
         return json.loads(meta.read_text(encoding="utf-8"))
 
