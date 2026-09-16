@@ -243,7 +243,13 @@ FALLBACK: dict[str, str | None] = {
     "corrector_targets": "src/data/{source}/mitigation/inputs/corrector_targets_{v}.parquet",
     "corrected":     "src/data/{source}/mitigation/{v}_corrected.parquet",
     "mitigated":     "src/models/{source}/mitigated/{v}.pkl",
-    "reeval_scores": "src/data/{source}/reeval/{v}_mitigated_scores.parquet",
+    "reeval_scores": "src/data/{source}/reeval/{v}/{v}_mitigated_scores.parquet",
+                     # per-version DIRECTORY added 2026-09-16, matching "attributions" /
+                     # "mitigated_attributions" above -- version x split x axis was already
+                     # multiplying flat filenames past the point of being readable in one listing.
+                     # The ad hoc "decisions" files (reeval/<v>_decisions_..._tau<value>.parquet,
+                     # no declared kind -- 03_05 builds the path by hand) moved the same way, for
+                     # the same reason, so both artefact families under reeval/ stay consistent.
     "shap_did_input": "src/data/{source}/estimation/shap_did/{v}/{v}_shap_did_input.parquet",
                      # "estimation/", not "detection/": this feeds src/estimator/concentration.py
                      # (the SHAP-DiD region x era tags for Build 04's DiD estimate), never
