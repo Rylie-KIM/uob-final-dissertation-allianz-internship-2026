@@ -220,17 +220,17 @@ FALLBACK: dict[str, str | None] = {
     "attributions":  "src/data/{source}/detection/shap/{v}/{v}_attributions.parquet",
                      # the one kind that multiplies: splits x backends x (parquet + _meta.json),
                      # so it gets a per-version DIRECTORY rather than a flat {v}_ prefix. The
-                     # prefix is kept inside it too — attribute_all.py and the SHAP notebooks
-                     # build sibling names off path.stem, and a file copied out of the tree
-                     # should still say which model it explains.
+                     # prefix is kept inside it too — the SHAP notebooks build sibling names off
+                     # path.stem, and a file copied out of the tree should still say which model
+                     # it explains.
                      #
                      # THIS TEMPLATE IS NOT THE WHOLE FILENAME. It spells no split and no
                      # backend; both are appended downstream, in this order:
                      #   1. path() appends `_{split}` — the generic SPLIT_KINDS step at the
                      #      bottom of path(), NOT something visible in the template here.
-                     #   2. the caller appends the backend suffix: attribute_all.py's
-                     #      --out-suffix (see its command()), mirrored by _attributions_path()
-                     #      in notebook/real/00_shap_attribution.ipynb §0.
+                     #   2. the caller appends the backend suffix (e.g. "_native") before passing
+                     #      --out to attribute.py — see _attributions_path() in
+                     #      notebook/real/00_shap_attribution.ipynb §0.
                      #   3. the meta is a sibling built off the final stem: + "_meta.json".
                      # So v3 / split "oot" / backend "native" resolves to
                      #   src/data/real/detection/shap/v3/v3_attributions_oot_native.parquet
@@ -253,13 +253,14 @@ FALLBACK: dict[str, str | None] = {
     "shap_did_input": "src/data/{source}/estimation/shap_did/{v}/{v}_shap_did_input.parquet",
                      # "estimation/", not "detection/": this feeds src/estimator/concentration.py
                      # (the SHAP-DiD region x era tags for Build 04's DiD estimate), never
-                     # src/detector/ (Build 02's SFPDetector) — the two packages' own artefact
-                     # families should not share a directory just because both are SHAP-derived.
+                     # src/detector/ (Build 02's ResidualPeakAlgorithm) — the two packages' own
+                     # artefact families should not share a directory just because both are
+                     # SHAP-derived.
     "mitigated_attributions": "src/data/{source}/mitigation/shap/{v}/{v}_mitigated_attributions.parquet",
                      # same "template is not the whole filename" caveat as "attributions": split
                      # is appended by path()'s generic SPLIT_KINDS step, the axis suffix is
                      # appended by the caller (00_SHAP.ipynb), and a backend suffix (if ever
-                     # needed) would be appended the same way attribute_all.py does for "_native".
+                     # needed) would be appended the same way, e.g. "_native".
                      # Per-version DIRECTORY added 2026-09-16 (matching "attributions" above):
                      # version x split x axis was already multiplying flat filenames past the
                      # point of being readable in one listing.
@@ -658,39 +659,6 @@ def column(version: str, canonical: str) -> str:
             f"config.VERSIONS['{version}']['columns']['{canonical}'] is still a placeholder."
         )
     return value
-
-
-# ======================================================================================
-# 4b. What a VERSION-ENV worker can actually read and write
-# ======================================================================================
-#
-# `path()` above is the ANALYSIS env's truth: every artefact is parquet there, and every reader
-# in loaders/ + the notebooks resolves it that way. One environment cannot honour that.
-
-#: Version envs with no parquet engine. env-v1 is Python 3.5.6, for which neither pyarrow nor
-#: fastparquet exists or can be built -- so v1's scripts read and write CSV, and
-#: `v1_csv_to_parquet.py` converts afterwards in the analysis env. This is a LEGACY carve-out,
-#: not a growing list: v2/v3 have engines, and every version after v3 arrives on Python >= 3.10.
-NO_PARQUET_ENVS = ("v1",)
-
-
-def worker_path(kind: str, version: str, source: str = "real",
-                split: str | None = None) -> pathlib.Path:
-    """The path to hand a script running INSIDE that version's env -- CSV where parquet is not readable.
-
-    Same artefact, same directory, same stem as `path()`; only the extension differs, which is
-    exactly the convention `01_export_v1.ipynb` writes under and `v1_csv_to_parquet.py` converts
-    from (`config.path(...).with_suffix(".csv")`).
-
-    Use it for anything a version-env worker opens or writes (`predict.py --features/--out`);
-    keep `path()` for everything the analysis env reads, since the CSV is converted to that
-    parquet before analysis sees it. A v1 run therefore leaves CSV behind and is not finished
-    until the converter has run.
-    """
-    p = path(kind, version, source, split=split)
-    if version in NO_PARQUET_ENVS and p.suffix == ".parquet":
-        return p.with_suffix(".csv")
-    return p
 
 
 FEATURE_REGISTRY = ROOT / "features" / "registry"

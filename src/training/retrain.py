@@ -21,10 +21,10 @@ MODERN PYTHON (>=3.10) SINCE 2026-09-02. This file used to carry the py3.5 disci
 never retrained (its training data was destroyed; 03_03 refuses the env-v1 kernel), so that
 discipline protected an interpreter with no way to reach this code. It now assumes env-v2/env-v3
 and is IMPORTABLE: `notebook/real/mitigation/03_03_retrain.ipynb` runs on the version kernel and
-calls `retrain()` directly, and the CLI main wraps the same function for the config-aware driver
-`training/retrain_all.py` and for `pipeline/pipeline.py`. Paths still arrive as ARGUMENTS, never
-from config — the caller resolves them (the driver in the analysis env, the notebook through its
-own `import config`), which is the repo's standard driver/worker split.
+calls `retrain()` directly, and the CLI main wraps the same function for `pipeline/pipeline.py`.
+Paths still arrive as ARGUMENTS, never from config — the caller resolves them (the notebook
+through its own `import config`, on the analysis env kernel), which is the repo's standard
+driver/worker split.
 
   src/envs/v2/.venv/Scripts/python.exe src/training/retrain.py \
       --baseline src/models/real/baseline/v2.pkl \
@@ -32,7 +32,7 @@ own `import config`), which is the repo's standard driver/worker split.
       --labels   src/data/real/mitigation/v2_corrected_train.parquet \
       --version v2 --out-model src/models/real/mitigated/v2_train.pkl
 
-(In practice run src/training/retrain_all.py instead — it resolves all of those from config.)
+Run once per version, in that version's own env — there is no all-versions driver.
 """
 from __future__ import annotations
 

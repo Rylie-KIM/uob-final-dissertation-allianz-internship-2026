@@ -7,10 +7,10 @@ env — which is exactly why it must run in env-vX (see src/docs/DESIGN.md).
 
 PATTERN B SINCE 2026-09-02 (was Pattern A). This is the shared v2/v3 file, written for >=3.10;
 `predict_v1.py` is its FROZEN py3.5 twin for env-v1 (no f-strings, ASCII-only, no config, CSV
-I/O — env-v1 has no parquet engine). `score_all.py` dispatches on the version; the CLI flags are
-identical across the pair. This file is also IMPORTABLE: 03_03_retrain.ipynb runs on the version
-kernel and calls `predict()` directly, and the CLI main wraps the same function for score_all.py
-and pipeline/pipeline.py.
+I/O — env-v1 has no parquet engine). The CLI flags are identical across the pair; which twin to
+run is a manual choice (v1 -> predict_v1.py, v2/v3 -> this file), never batched across versions.
+This file is also IMPORTABLE: 03_03_retrain.ipynb runs on the version kernel and calls `predict()`
+directly, and the CLI main wraps the same function for pipeline/pipeline.py.
 
 `features` holds the POST-preprocessing matrix (confirmed 2026-07-31: the real repos pickle the
 preprocessor separately from the model, and predict_proba takes the already-transformed columns).
@@ -29,8 +29,7 @@ frame is either silently wrong or a hard stop, never harmless.
       --features src/data/real/inputs/features_v2_test.parquet \
       --version v2 --out src/data/real/detection/v2_scores_test.parquet
 
-(For a full run use src/scoring/score_all.py instead — it resolves every path from config and
-hands env-v1 to predict_v1.py.)
+Run once per version, in that version's own env — there is no all-versions driver.
 """
 from __future__ import annotations
 
