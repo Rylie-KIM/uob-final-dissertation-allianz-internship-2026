@@ -5,11 +5,17 @@ knowledge of which version it is running. It loads that version's pickled ESTIMA
 P(total_loss) per claim. Loading the pkl requires that version's repo importable in the active
 env — which is exactly why it must run in env-vX (see src/docs/DESIGN.md).
 
-PATTERN B SINCE 2026-09-02 (was Pattern A). This is the shared v2/v3 file, written for >=3.10;
-`predict_v1.py` is its FROZEN py3.5 twin for env-v1 (no f-strings, ASCII-only, no config, CSV
-I/O — env-v1 has no parquet engine). The CLI flags are identical across the pair; which twin to
-run is a manual choice (v1 -> predict_v1.py, v2/v3 -> this file), never batched across versions.
-This file is also IMPORTABLE: 03_03_retrain.ipynb runs on the version kernel and calls `predict()`
+v2/v3 ONLY. v1 has no twin of this file (`predict_v1.py` deleted 2026-09-17): v1's `scores` kind
+is not recomputed at all — `01_export_v1.ipynb` writes `detection/v1_scores_<split>.csv` directly
+from `predictions.pkl`, the original 2018 pipeline's own saved predictions, for every split. v1 is
+also never retrained (`03_03_retrain.ipynb` refuses the env-v1 kernel), so there is no mitigated
+v1 model to score either — nothing left for a v1 scorer to do. The pipeline this project designs
+going forward diagnoses/mitigates the ML systems *after* v2/v3, not v1 itself; v1 only ever enters
+as the placebo/validity-check side of the v1->v2 SHAP-DiD pair (`estimator/shap_did.py`), which
+needs v1's scores as data, never as something this file computes.
+
+PATTERN B SINCE 2026-09-02 (was Pattern A, when a since-deleted py3.5 v1 twin existed). This file
+is also IMPORTABLE: 03_03_retrain.ipynb runs on the version kernel and calls `predict()`
 directly, and the CLI main wraps the same function for pipeline/pipeline.py.
 
 `features` holds the POST-preprocessing matrix (confirmed 2026-07-31: the real repos pickle the
@@ -29,7 +35,7 @@ frame is either silently wrong or a hard stop, never harmless.
       --features src/data/real/inputs/features_v2_test.parquet \
       --version v2 --out src/data/real/detection/v2_scores_test.parquet
 
-Run once per version, in that version's own env — there is no all-versions driver.
+Run once per version (v2, v3), in that version's own env — there is no all-versions driver.
 """
 from __future__ import annotations
 
