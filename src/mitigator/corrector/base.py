@@ -2,7 +2,10 @@
 
 A corrector turns a version's (features, contaminated labels) into a corrected training set
 (claim_id + label + weight) that `retrain.py` fits in the version env. It runs in the Analysis Layer
-and loads no model. `SFPMitigator` holds one of these and delegates to it (Strategy pattern).
+and loads no model. Callers instantiate a concrete corrector (e.g. `ReweightCorrector(scheme=...)`)
+and call `.correct(...)` directly (Strategy pattern). No context/wrapper class holds one —
+`SFPMitigator` played that role until deleted 2026-09-16 (unused by any real caller; see this
+package's `__init__.py`).
 """
 from __future__ import annotations
 

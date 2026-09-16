@@ -1,23 +1,14 @@
 """SFP mitigation (Analysis Layer — loads no model).
 
-Public API: `SFPMitigator` (holds a corrector + optional policy) and the pluggable strategies under
-`mitigator.corrector` and `mitigator.policy`.
-
-Runtime type-checking: `beartype_this_package()` installs an import hook so every function and
-method in this package (incl. `mitigator.corrector` / `mitigator.policy`) has its type hints
-enforced at call time.
+Public API: the pluggable `TrainingDataCorrector` strategies under `mitigator.corrector`, called
+directly (`ReweightCorrector(scheme=...).correct(features, labels, feature_cols)`). No
+context/wrapper class holds them — `SFPMitigator` was deleted 2026-09-16: it was imported by no
+real-data notebook (they call `ReweightCorrector` directly), and its only caller was
+`pipeline/pipeline.py`, which now calls the corrector directly too.
 """
-from beartype.claw import beartype_this_package
-
-beartype_this_package()
-
-from mitigator.corrector import IPSCorrector, TrainingDataCorrector  # noqa: E402
-from mitigator.policy import InvestigationPolicy  # noqa: E402
-from mitigator.sfp_mitigator import SFPMitigator  # noqa: E402
+from mitigator.corrector import ReweightCorrector, TrainingDataCorrector
 
 __all__ = [
-    "SFPMitigator",
     "TrainingDataCorrector",
-    "IPSCorrector",
-    "InvestigationPolicy",
+    "ReweightCorrector",
 ]
