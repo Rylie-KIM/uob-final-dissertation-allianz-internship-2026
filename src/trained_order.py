@@ -199,8 +199,8 @@ def select_features(X, est, id_col, registry_path=None) -> Tuple[List[str], str]
         raise SystemExit(
             "the estimator exposes no trained feature names, and no --features-json was given,\n"
             "so the feature columns cannot be determined.\n"
-            "Run the driver instead (training/retrain_all.py, scoring/score_all.py) -- it passes\n"
-            "the registry path from config.\n"
+            "Pass --features-json <path to features/registry/<v>.json> (config.registry_path(v)\n"
+            "resolves it in the analysis env).\n"
             "To build the registry:  <this python> features/extract_features.py --version <v>\n")
 
     missing = [c for c in trained if c not in X.columns]

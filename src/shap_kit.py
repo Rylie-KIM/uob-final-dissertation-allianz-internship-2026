@@ -29,7 +29,7 @@ that key instead of failing the whole notebook.
     sk.plot_bar(att)                          sk.plot_beeswarm(att)
     sk.plot_dependence(att, "repair_ratio")   sk.plot_waterfall(att, row=0)
 
-Every plot function returns a matplotlib Figure — save it with `figstyle.save(fig, name)`.
+Every plot function returns a matplotlib Figure — save it with `figstyle.save_fig(fig, name)`.
 """
 from __future__ import annotations
 

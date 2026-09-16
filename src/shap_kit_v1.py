@@ -44,8 +44,8 @@ TRAINING_CONFIG = OrderedDict([("eval_metric", "mlogloss"), ("n_jobs", 20), ("si
 # Which attribution lands on the CANONICAL (no-suffix) filename, and what the others are called.
 # Identical to 00_SHAP.ipynb's ACTIVE_BACKEND/OUT_SUFFIX for v2/v3, so all three versions spell
 # the same backend the same way: 00_shap_attribution.ipynb's interventional runs read the
-# no-suffix file and its "path_dependent" run reads "_native" (attribute_all.py --out-suffix's
-# spelling, which is why it is not "_tree_path_dependent").
+# no-suffix file and its "path_dependent" run reads "_native" (the spelling attribute.py's --out
+# uses, which is why it is not "_tree_path_dependent").
 CANONICAL_PERTURBATION = "interventional"
 BACKEND_SUFFIX = OrderedDict([("interventional", "_shap"), ("tree_path_dependent", "_native")])
 DECISION_RULE = OrderedDict([
@@ -90,8 +90,8 @@ def attributions_csv_path(split, suffix=""):
     """CSV path for one (split, backend). Convert to parquet in the analysis .venv before
     00_shap_attribution.ipynb reads it — env-v1 has no parquet engine.
 
-    `suffix` is appended AFTER the split, matching config.path("attributions", ...) +
-    attribute_all.py's --out-suffix: v1_attributions_val2_native.csv. Pass out_suffix(
+    `suffix` is appended AFTER the split, matching config.path("attributions", ...) with a
+    backend suffix appended: v1_attributions_val2_native.csv. Pass out_suffix(
     att.perturbation) rather than a literal, so the two spellings cannot drift.
 
     config.py's "attributions" template gives every version its OWN directory under shap/
