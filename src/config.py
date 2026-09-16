@@ -249,12 +249,14 @@ FALLBACK: dict[str, str | None] = {
                      # (the SHAP-DiD region x era tags for Build 04's DiD estimate), never
                      # src/detector/ (Build 02's SFPDetector) — the two packages' own artefact
                      # families should not share a directory just because both are SHAP-derived.
-    "mitigated_attributions": "src/data/{source}/mitigation/shap/{v}_mitigated_attributions.parquet",
+    "mitigated_attributions": "src/data/{source}/mitigation/shap/{v}/{v}_mitigated_attributions.parquet",
                      # same "template is not the whole filename" caveat as "attributions": split
-                     # is appended by path()'s generic SPLIT_KINDS step, and a backend suffix (if
-                     # ever needed) would be appended by the caller the same way attribute_all.py
-                     # does for "_native". No per-version directory here (unlike "attributions")
-                     # because there is no multi-backend fan-out planned for this kind yet.
+                     # is appended by path()'s generic SPLIT_KINDS step, the axis suffix is
+                     # appended by the caller (00_SHAP.ipynb), and a backend suffix (if ever
+                     # needed) would be appended the same way attribute_all.py does for "_native".
+                     # Per-version DIRECTORY added 2026-09-16 (matching "attributions" above):
+                     # version x split x axis was already multiplying flat filenames past the
+                     # point of being readable in one listing.
 }
 
 
