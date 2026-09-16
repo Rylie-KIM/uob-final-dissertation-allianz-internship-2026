@@ -356,7 +356,8 @@ v1 splits on **`lossdate`** (when the accident happened); v2 splits on **`Report
 
 - **v2's choice is arguably the more honest one operationally:** only *reported* claims are knowable at training time, so ordering by `ReportedDate` reflects the information actually available at each point — a `lossdate` ordering can place a late-reported claim in the training window even though the insurer did not know about it yet.
 - **But the two versions' boundaries are not comparable.** A v2 `ReportedDate` cut is not the same population slice as a v1 `lossdate` cut, so the split windows cannot be lined up directly across versions.
-- **Reporting lag is not constant.** It plausibly varies by channel (FNOL phone vs ENOL online) and by severity, so sorting by `ReportedDate` **reshuffles** the loss-date ordering, and the OOT block can contain *older losses reported late*. 🔎 Quantify the lag distribution (and its drift) before treating v2's OOT block as cleanly "later" in loss terms.
+- **Reporting lag is not constant.** It plausibly varies by channel (FNOL phone vs ENOL online) and by severity, so sorting by `ReportedDate` **reshuffles** the loss-date ordering, and the OOT block can contain *older losses reported late*.
+  > **🚫 Scope decision (2026-09-13): channel (FNOL/ENOL) case-mix is explicitly OUT OF SCOPE for this thesis.** Quantifying the lag distribution by channel needs the raw dataset's real channel column (no canonical one is declared anywhere in `src/`) and more time than the thesis has; judged not a major driver of the results. This is a deliberate exclusion, stated here and wherever channel-mix could plausibly confound a comparison (e.g. `notebook/real/mitigation/03_01_corrector_inputs.ipynb`'s missing/mismatch diagnostics) — not an oversight, and not to be silently revisited without a reason.
 
 ### Data window — and why it matters for the SFP narrative
 

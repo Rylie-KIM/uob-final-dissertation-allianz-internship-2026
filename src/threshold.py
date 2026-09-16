@@ -113,6 +113,35 @@ def tune(
     return float(thresholds[ok.min()]) if ok.size else fallback
 
 
+def tune_history(y, scores, *, grid=None) -> pd.DataFrame:
+    """Every grid threshold's precision/recall/CM under the STRICT rule `score > t` — the record
+    `tune()` itself throws away once it picks (or fails to pick) one tau.
+
+    Use this whenever `tune()` returns `None` (no cutoff reaches target) and the question is HOW
+    CLOSE the grid got — the best precision actually reachable, and at what recall/tau — or
+    whenever the full precision-recall trade-off across the grid is worth keeping regardless of
+    whether the target was met.
+
+    Columns: tau, precision, recall, TP, FP, FN, TN, n_pos. One row per unique threshold, tau
+    ascending — the same grid `tune()` scans (`np.unique(scores)` unless `grid` is given).
+    """
+    y = np.asarray(y).astype(int)
+    s = np.asarray(scores, dtype=float)
+    thresholds = np.unique(s if grid is None else np.asarray(grid, dtype=float))
+    n_pos = int((y == 1).sum())
+
+    rows = []
+    for t in thresholds:
+        pred = s > t
+        tp = int((pred & (y == 1)).sum()); fp = int((pred & (y == 0)).sum())
+        tn = int((~pred & (y == 0)).sum()); fn = int((~pred & (y == 1)).sum())
+        rows.append({"tau": float(t),
+                     "precision": tp / (tp + fp) if tp + fp else 0.0,
+                     "recall": tp / n_pos if n_pos else 0.0,
+                     "TP": tp, "FP": fp, "FN": fn, "TN": tn, "n_pos": n_pos})
+    return pd.DataFrame(rows)
+
+
 def apply(version: str, df: pd.DataFrame, score_col: str = schema.SCORE) -> np.ndarray:
     """Reproduce that version's scrap decisions from its scores. Returns 0/1.
 
