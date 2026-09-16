@@ -40,8 +40,10 @@ USAGE — one call per version, each with THAT version's interpreter:
         --explain-ids src/data/real/inputs/shap_explain_ids.parquet \
         --background-ids src/data/real/inputs/shap_background_ids.parquet
 
-(In practice run src/scoring/attribute_all.py instead — it resolves every path from config and
-builds the two id files so all versions are explained on the SAME claims.)
+Run once per version, in that version's own env — there is no all-versions driver, since every
+version's model only ever unpickles inside its own env anyway. --explain-ids / --background-ids
+are optional: pass them to fix a specific claim set (e.g. a shared v1/v2 sample built by hand),
+or omit them and --rows / --background draw a per-version sample instead.
 """
 from __future__ import annotations
 
