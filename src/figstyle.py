@@ -90,6 +90,7 @@ _NEUTRAL_SUFFIXES = (
     # shap_did/04_01_shap_did_inputs.ipynb — coverage table, no per-feature content
     "05_shap_did_input_coverage",
     # shap_did/04_02_shap_did_concentration.ipynb — DiD/dose/drift summary tables
+    "04_02_shap_did_assumptions",
     "04_02_dose_context",
     "04_02_cross_version_estimate",
     "04_02_local_band_h_selection",

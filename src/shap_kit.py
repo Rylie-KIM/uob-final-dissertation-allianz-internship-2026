@@ -52,6 +52,9 @@ from trained_order import (   # noqa: E402,F401
     feature_order,
     model_feature_names,
 )
+# The actual TreeSHAP dispatch -- shared with attribution/attribute.py, the headless worker
+# pipeline.py shells out to. See compute()'s docstring and backend.py's own module docstring.
+from attribution.backend import _compute_attribute  # noqa: E402
 
 try:
     import matplotlib.pyplot as plt
@@ -349,63 +352,17 @@ def compute(est, X: pd.DataFrame, background=None, backend: str = "auto") -> Att
     `background` (a sample of rows) switches shap to the INTERVENTIONAL reference. Pass one when
     the question is "versus this population"; leave it None to stay tree-path-dependent, which is
     also what the native fallback always is.
+
+    The actual dispatch (`_via_shap_backend`/`_via_native_booster_backend`/`_compute_attribute`)
+    lives in `attribution/backend.py`, shared with attribute.py — the headless worker
+    pipeline.py shells out to. This wrapper only adds the Attribution object the plotting
+    functions in this module read (backend.py knows nothing about plotting).
     """
     X = align(X, est)
-
-    # auto refers to trying shap >> then, navtive fall back 
-    if backend in ("auto", "shap"):
-        try:
-            return _via_shap(est, X, background)
-        except Exception as exc:
-            if backend == "shap":
-                raise
-            print(f"  shap unavailable or unhappy here ({type(exc).__name__}: {exc}) "
-                  f"-> using the booster's own TreeSHAP")
-    return _via_booster(est, X)
-
-
-def _via_shap(est, X, background):
-    import shap
-
-    kwargs = {"model_output": "raw"}
-    if background is not None:
-        kwargs["data"] = background
-        kwargs["feature_perturbation"] = "interventional"
-    try:
-        expl = shap.TreeExplainer(est, **kwargs)
-    except TypeError:                                  # older/newer shap dropped a kwarg
-        expl = shap.TreeExplainer(est, background) if background is not None else shap.TreeExplainer(est)
-
-    values = expl.shap_values(X)
-    if isinstance(values, list):                       # some versions return one array per class
-        values = values[-1]
-    values = np.asarray(values)
-    if values.ndim == 3:
-        values = values[:, :, -1]
-
-    base = expl.expected_value
-    base = float(np.asarray(base).ravel()[-1]) if np.ndim(base) else float(base)
-    return Attribution(values, np.full(len(X), base), X, "shap",
-                       "interventional" if background is not None else "tree_path_dependent",
-                       note="shap %s" % shap.__version__)
-
-
-def _via_booster(est, X):
-    if hasattr(est, "get_booster"):
-        import xgboost as xgb
-
-        booster = est.get_booster()
-        dmatrix = xgb.DMatrix(X, feature_names=list(X.columns))
-        contribs = np.asarray(booster.predict(dmatrix, pred_contribs=True))
-        if contribs.ndim == 3:
-            contribs = contribs[:, -1, :]
-        return Attribution(contribs[:, :-1], contribs[:, -1], X, "native",
-                           "tree_path_dependent", note="xgboost %s" % xgb.__version__)
-    if hasattr(est, "booster_"):                       # lightgbm
-        contribs = np.asarray(est.predict(X, pred_contrib=True))
-        return Attribution(contribs[:, :-1], contribs[:, -1], X, "native",
-                           "tree_path_dependent", note="lightgbm")
-    raise RuntimeError(f"no TreeSHAP route for {type(est).__name__}; install shap in this env")
+    phi, base, meta = _compute_attribute(est, X, background, backend)
+    note = (f"shap {meta['shap_version']}" if meta["backend"] == "shap"
+            else f"{meta['library']} {meta['library_version']}")
+    return Attribution(phi, base, X, meta["backend"], meta["perturbation"], note=note)
 
 
 def check_additivity(att: Attribution, est, tol: float = 1e-3) -> float:
