@@ -72,7 +72,7 @@ def run_one(spec: dict, dry_run: bool) -> None:
     out_path = OUT_DIR / f"00_SHAP_{spec['version']}_{spec['split']}_{spec['tag']}.ipynb"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "papermill", str(NOTEBOOK), str(out_path),
+        sys.executable, "-m", "papermill", str(NOTEBOOK), str(out_path),
         "--kernel", KERNELS[spec["version"]],
         "-p", "SPLIT", spec["split"],
     ]
@@ -84,7 +84,7 @@ def run_one(spec: dict, dry_run: bool) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description="batch 00_SHAP")
     ap.add_argument("--versions", nargs="+", default=["v2", "v3"], choices=["v2", "v3"])
     ap.add_argument("--only-baseline", action="store_true")
     ap.add_argument("--only-mitigated", action="store_true")
