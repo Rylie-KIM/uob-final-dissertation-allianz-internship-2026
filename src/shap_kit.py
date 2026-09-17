@@ -56,7 +56,7 @@ from trained_order import (   # noqa: E402,F401
 try:
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
-except ImportError:                  # a headless caller (scoring/attribute.py) imports this
+except ImportError:                  # a headless caller (attribution/attribute.py) imports this
     plt = None                       # module for feature_order() alone and never plots. Only
     LinearSegmentedColormap = None   # the plotting half needs matplotlib; style() says so.
 
