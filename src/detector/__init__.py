@@ -1,16 +1,23 @@
 """SFP detection (Analysis Layer — loads no model).
 
-Public API: `SFPDetector` (holds a strategy, returns `DetectionReport`) + the pluggable
-`DetectionAlgorithm` strategies under `detector.algorithm`.
+Public API: the pluggable `DetectionAlgorithm` strategies under `detector.algorithm`, called
+directly (`ResidualPeakAlgorithm().detect(scores, labels, score_col=...)`). No context/wrapper
+class holds them — `SFPDetector` was deleted 2026-09-16: it was imported by no real-data
+notebook (they call `detector.algorithm.residual_peak.peak0`/`residual` directly), and its only
+caller was `pipeline/pipeline.py`, which now calls the algorithm directly too.
 
-Runtime type-checking: `beartype_this_package()` installs an import hook so every function and
-method in this package (incl. `detector.algorithm`) has its type hints enforced at call time.
+`DoseMeter` and `ScoreDriftMeter` — minor detection-layer metrics (model-scrap share / own-vs-
+prior score drift on a version's training population), neither a `DetectionAlgorithm`
+implementation — sit directly here rather than under `algorithm/`, the same way `report.py` does.
+`DoseMeter` moved from `estimator/shap_did.py` 2026-09-16 (`ShapDiDEstimator` still imports it
+from here); `ScoreDriftMeter` extracted 2026-09-17 from `04_02_shap_did_concentration.ipynb` §4.
 """
-from beartype.claw import beartype_this_package
 
-beartype_this_package()
+# project scope changed -> detection algorithm on-hold. Only DoseMeter/ScoreDriftMeter are used.
+# from detector.algorithm import DetectionAlgorithm, ResidualPeakAlgorithm
+from detector.dose import DoseMeter
+from detector.score_drift import ScoreDriftMeter
 
-from detector.algorithm import DetectionAlgorithm, ResidualPeakAlgorithm  # noqa: E402
-from detector.sfp_detector import DetectionReport, SFPDetector  # noqa: E402
+# __all__ = ["DetectionAlgorithm", "ResidualPeakAlgorithm", "DoseMeter", "ScoreDriftMeter"]
+__all__ = ["DoseMeter", "ScoreDriftMeter"]
 
-__all__ = ["SFPDetector", "DetectionReport", "DetectionAlgorithm", "ResidualPeakAlgorithm"]

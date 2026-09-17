@@ -12,7 +12,9 @@ from sklearn.metrics import roc_auc_score
 from detector.algorithm.base import DetectionAlgorithm
 
 # --------------------------------------------------------------------------------------------------
-# Oracle-free reading primitives (shared by notebooks + detector.report).
+# Oracle-free reading primitives (shared by notebooks; `detector/report.py`, the plotting module
+# that also used these, was deleted 2026-09-16 -- used only by the old synthetic notebooks, never
+# a real one).
 #
 # The SFP residual is (genuine 0/1 label − model score) on the common garage-verified rows. Its KDE
 # height exactly at 0, ψ = peak0, is the threshold-free loop signal: a reinforcing loop piles mass on
@@ -106,7 +108,7 @@ class ResidualPeakAlgorithm(DetectionAlgorithm):
         labels: pd.DataFrame,
         score_col: str,
         id_col: str = "claim_id",
-        outcome_col: str = "observed_outcome",
+        outcome_col: str = "observed",     # canonical name — see src/schema.py
     ) -> dict:
         m = scores.merge(labels[[id_col, outcome_col]], on=id_col)
         r = residual(m[outcome_col], m[score_col])
