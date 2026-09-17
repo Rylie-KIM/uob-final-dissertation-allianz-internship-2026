@@ -47,7 +47,7 @@ import pathlib
 import numpy as np
 import pandas as pd
 
-BASE_COL = "_base_value"     # written by scoring/attribute.py; never a feature
+BASE_COL = "_base_value"     # written by attribution/attribute.py; never a feature
 
 
 # ======================================================================================
@@ -178,7 +178,7 @@ def require_comparable(metas: dict[str, dict]) -> None:
         raise ValueError(
             "these versions were attributed under different SHAP settings, so their concentration "
             f"numbers are not comparable:\n{detail}\n"
-            "Re-run src/scoring/attribute_all.py with one --backend for all of them."
+            "Re-run src/attribution/attribute.py for each version with the SAME --backend."
         )
 
     # NOT an error, and usually not fixable: the versions' data windows leave no claim common to
@@ -189,7 +189,8 @@ def require_comparable(metas: dict[str, dict]) -> None:
         print("NOTE: the versions were explained on their own rows, not one shared claim set "
               f"({ids}). Every difference below is confounded with case-mix — state that wherever "
               "it is reported. A shared set is only reachable for a pair whose windows overlap "
-              "(v1/v2): attribute_all.py --shared-claims.")
+              "(v1/v2): build the claim_id intersection by hand and pass it to attribute.py via "
+              "--explain-ids/--background-ids for each version.")
 
     # Split names are per-version and deliberately not unified (v3's holdout is "oot", v2's is
     # "test"), so differing names are NOT an error — but one version measured on train against
@@ -197,7 +198,7 @@ def require_comparable(metas: dict[str, dict]) -> None:
     splits = {v: m.get("split") for v, m in metas.items()}
     if None in splits.values():
         print(f"WARNING: some attributions predate the --split flag ({splits}) — which rows they "
-              f"describe is unrecorded. Re-run attribute_all.py to stamp it.")
+              f"describe is unrecorded. Re-run attribute.py for that version to stamp it.")
     elif len(set(splits.values())) > 1:
         print(f"NOTE: versions were attributed on differently-named splits ({splits}). Fine when "
               f"they play the same role (v2 'test' and v3 'oot' are both holdouts); a confound "
