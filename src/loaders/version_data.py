@@ -142,7 +142,7 @@ class VersionData:
     def attributions(self) -> pd.DataFrame:
         """claim_id + one per-row SHAP column per feature + `_base_value`.
 
-        Written by scoring/attribute.py inside that version's env — the notebook reads the parquet
+        Written by attribution/attribute.py inside that version's env — the notebook reads the parquet
         and never opens a pkl. Feature columns keep their encoded feature names on purpose (see .features).
         """
         return _read("attributions", self.version, self.source,
@@ -163,7 +163,7 @@ class VersionData:
         if not meta.exists():
             raise FileNotFoundError(
                 f"[{self.version}] attributions exist but {meta.name} does not. Re-run "
-                f"src/scoring/attribute.py for {self.version} --split {split} — without the meta "
+                f"src/attribution/attribute.py for {self.version} --split {split} — without the meta "
                 f"there is no record of which SHAP backend produced these numbers, and versions "
                 f"must not be compared blind."
             )
