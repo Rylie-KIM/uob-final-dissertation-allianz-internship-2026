@@ -106,6 +106,30 @@ _NEUTRAL_SUFFIXES = (
     "04_03_step3_local_h_selection",
     "04_03_step3_shap_did_delta_local",
     "04_03_whole_vs_local",
+    # 00_shap_attribution.ipynb — version/basis/run-level summaries, no per-feature content
+    "feature_overlap_pairs_per_version",
+    "comparison_bases_summary",
+    "hyperparameter_comparison",
+    "zero_mass_columns_summary",
+    "zero_mass_columns_in_basis",
+    "cross_run_concentration_comparison",
+)
+
+# Same idea as _NEUTRAL_SUFFIXES, for names whose feature-free part is a PREFIX rather than a
+# suffix because a run label or basis slug is appended after it (00_shap_attribution.ipynb's
+# `profile_<run>_<basis>`, `decision_side_profile_<run_label>`,
+# `backend_comparison_summary_<run_int>_vs_<run_tpd>` — none of these ever carry a feature name).
+_NEUTRAL_PREFIXES = (
+    "profile_",
+    "decision_side_profile_",
+    "backend_comparison_summary_",
+)
+
+# Same idea again, for a name with a variable part in the MIDDLE (00_shap_attribution.ipynb's
+# hill-diversity figures, "04<letter>_real_shap_hill_profile_by_run_<basis_slug>" — the "real_shap"
+# in the name is misleading here: the curves are aggregate Dq only, no feature name ever appears).
+_NEUTRAL_CONTAINS = (
+    "_hill_profile_by_run_",
 )
 
 
@@ -115,7 +139,9 @@ def _out_dir(name: str) -> Path:
         return FIG_DIR
     if name.startswith("alias_"):
         return FIG_DIR / "alias"
-    if any(name.endswith(suffix) for suffix in _NEUTRAL_SUFFIXES):
+    if (any(name.endswith(suffix) for suffix in _NEUTRAL_SUFFIXES)
+            or any(name.startswith(prefix) for prefix in _NEUTRAL_PREFIXES)
+            or any(part in name for part in _NEUTRAL_CONTAINS)):
         return FIG_DIR
     return FIG_DIR / "real_named"
 
