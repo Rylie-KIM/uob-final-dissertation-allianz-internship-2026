@@ -123,6 +123,7 @@ _NEUTRAL_PREFIXES = (
     "profile_",
     "decision_side_profile_",
     "backend_comparison_summary_",
+    "run_meta_",
 )
 
 # Same idea again, for a name with a variable part in the MIDDLE (00_shap_attribution.ipynb's
