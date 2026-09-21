@@ -974,16 +974,36 @@ def plot_waterfall(att: Attribution, row: int, top_n: int = 12, label=None, ax=N
 
 
 def plot_force(att: Attribution, row: int, top_n: int = 10, label=None, ax=None):
-    """The same decomposition as one pushed bar: forces towards (red) and away from (blue) scrap.
+    """The same decomposition as plot_waterfall, compacted onto one row so several claims can sit
+    side by side — comparing three claims at once, not explaining one in full.
 
-    Compact enough to put several claims side by side — which is how it earns its place next to
-    the waterfall: comparing three claims at once, not explaining one in full.
+    FIXED 2026-09-23: the previous version kept only the top_n features by |phi| and dropped
+    every other feature's contribution on the floor, so the drawn bars summed to the top_n subset
+    only, not phi.sum() — the f(x) line (drawn at base + phi.sum(), correctly) could land well
+    short of or past the visible bar tip depending on how much mass sat outside top_n (confirmed
+    on real output: v3's "strongest fast-track" claim draws bars ending near log-odds 9.4 while
+    its own f(x)=12.478, a gap of ~3.1 from ~150 unshown features). plot_waterfall next door
+    already folds everything outside top_n into one "N other features" bucket so its bars always
+    sum to phi.sum() exactly; this now does the same, then lays every segment (kept + the one
+    residual bucket) along a SINGLE cumulative stack from base, negatives first, so the bar tip
+    always lands exactly on the f(x) line, negatives still grouped left of base and positives
+    right of it for the "which way did this push" read.
     """
     phi = att.phi[row]
-    base, out = float(att.base[row]), float(att.base[row] + phi.sum())
-    order = np.argsort(-np.abs(phi))[:top_n]
-    pos = [(att.features[j], phi[j]) for j in order if phi[j] > 0]
-    neg = [(att.features[j], phi[j]) for j in order if phi[j] < 0]
+    base = float(att.base[row])
+    out = base + float(np.sum(phi))
+    order = np.argsort(-np.abs(phi))
+    keep, rest = order[:top_n], order[top_n:]
+
+    items = [(att.features[j], float(phi[j])) for j in keep]
+    if len(rest):
+        items.append((f"{len(rest)} other features", float(phi[rest].sum())))
+
+    neg = sorted((kv for kv in items if kv[1] < 0), key=lambda kv: kv[1])   # most negative first
+    pos = sorted((kv for kv in items if kv[1] > 0), key=lambda kv: -kv[1])  # largest first
+    names = [kv[0] for kv in neg + pos]
+    values = [kv[1] for kv in neg + pos]
+    starts = base + np.concatenate([[0.0], np.cumsum(values)[:-1]]) if values else np.array([])
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(FIG_W + 1.0, 1.9))
@@ -991,20 +1011,17 @@ def plot_force(att: Attribution, row: int, top_n: int = 10, label=None, ax=None)
         fig = ax.figure
 
     span = max(abs(out - base), 1e-9)
-    for group, colour, sign in ((sorted(neg, key=lambda kv: kv[1]), BLUE, +1),
-                                (sorted(pos, key=lambda kv: -kv[1]), RED, -1)):
-        cursor, depth = base, 0
-        for name, v in group:
-            ax.barh(0, v, left=cursor, color=colour, height=0.45,
-                    edgecolor="white", linewidth=0.7)     # the segment boundaries must be visible
-            # Only wide-enough segments are labelled, and consecutive labels alternate depth —
-            # otherwise the thin tail segments print on top of each other, as they always do near
-            # f(x) where the last few contributions bunch together.
-            if abs(v) > 0.06 * span:
-                depth += 1
-                ax.text(cursor + v / 2.0, sign * (0.34 + 0.26 * (depth % 2)), name, ha="center",
-                        va="bottom" if sign > 0 else "top", fontsize=6.5, color=INK)
-            cursor += v
+    for i, (name, v, s0) in enumerate(zip(names, values, starts)):
+        colour = BLUE if v < 0 else RED
+        ax.barh(0, v, left=s0, color=colour, height=0.45,
+                edgecolor="white", linewidth=0.7)     # the segment boundaries must be visible
+        # Only wide-enough segments are labelled, and consecutive labels alternate depth —
+        # otherwise the thin tail segments print on top of each other, as they always do near
+        # f(x) where the last few contributions bunch together.
+        if abs(v) > 0.06 * span:
+            sign = -1 if v < 0 else 1
+            ax.text(s0 + v / 2.0, sign * (0.34 + 0.26 * (i % 2)), name, ha="center",
+                    va="top" if v < 0 else "bottom", fontsize=6.5, color=INK)
 
     ax.axvline(base, color=GREY, lw=1, ls=":")
     ax.axvline(out, color=INK, lw=1.4)
