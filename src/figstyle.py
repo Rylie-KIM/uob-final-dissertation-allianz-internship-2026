@@ -219,6 +219,26 @@ def save_fig(fig, name: str, subdir: str | None = None) -> Path:
     return png
 
 
+def _drop_claim_id(df, index: bool):
+    """Strip a raw ``claim_id`` column, or an index/level literally named ``claim_id``, before a
+    table reaches a directory that is not ``subdir="internal"`` — alias/, real_named/, and the
+    flat/neutral bucket are all meant to be safe to read off the company laptop (alias/ to leave
+    it entirely), and a raw claim identifier slipping into one of them is a one-off oversight at
+    the call site, not a deliberate diagnostic. Centralised here rather than trusted to every
+    call site to remember; the only sanctioned way to keep ``claim_id`` in a saved table is
+    ``subdir="internal"``.
+    """
+    if "claim_id" in df.columns:
+        df = df.drop(columns="claim_id")
+    if index and "claim_id" in df.index.names:
+        if df.index.nlevels > 1:
+            df = df.droplevel("claim_id")
+        else:
+            df = df.reset_index(drop=True)
+            index = False
+    return df, index
+
+
 def save_table(df, name: str, index: bool = True, subdir: str | None = None) -> Path:
     """Save ``df`` to ``figures/<name>.csv``, index kept by default (normally the feature name).
 
@@ -232,10 +252,15 @@ def save_table(df, name: str, index: bool = True, subdir: str | None = None) -> 
     values, one row per claim) that still belongs in ``figures/`` next to that notebook's other
     output (every OTHER informational table already lives there — only actual data artefacts
     stay under ``src/data/real/``), but is worth keeping visually apart from the rest.
+
+    Without ``subdir`` (so: alias/, real_named/, or the flat/neutral bucket), any ``claim_id``
+    column or claim_id-named index/level is dropped before writing — see ``_drop_claim_id``.
     """
     out_dir = _out_dir(name)
     if subdir:
         out_dir = out_dir / subdir
+    else:
+        df, index = _drop_claim_id(df, index)
     out_dir.mkdir(parents=True, exist_ok=True)
     csv = out_dir / f"{name}.csv"
     df.to_csv(csv, index=index)
