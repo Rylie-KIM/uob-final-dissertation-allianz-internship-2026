@@ -97,6 +97,7 @@ _NEUTRAL_SUFFIXES = (
     "04_02_local_cross_version_estimate",
     "04_02_within_version_confound_check",
     "_04_02_score_drift_scatter",
+    "_04_02_score_drift_hist",
     "_04_02_shared_claims_scores",
     "04_02_v2_v3_score_drift_and_dose",
     # shap_did/04_03_shap_did_mitigation_delta.ipynb — concentration/DiD summary tables
