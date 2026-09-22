@@ -44,7 +44,18 @@ def _via_shap_backend(est, X: pd.DataFrame, background: pd.DataFrame | None):
     except TypeError:                                  # older/newer shap dropped a kwarg
         expl = shap.TreeExplainer(est, background) if background is not None else shap.TreeExplainer(est)
 
-    values = expl.shap_values(X)
+    # check_additivity=False: shap's OWN internal additivity check (np.allclose(atol=1e-2,
+    # rtol=1e-2), unconditional whenever model_output="raw") raises ExplainerError and discards
+    # the already-computed phi outright on any violation, with no way to inspect or tolerate the
+    # gap -- confirmed 2026-09-23 tripping on a genuinely tiny mismatch (~3e-4 on a ~5.08 margin,
+    # well inside shap's own stated tolerance band, so almost certainly xgboost-vs-TreeSHAP
+    # floating-point summation-order noise, not a wrong X). shap_kit.check_additivity() is this
+    # project's OWN version of the identical check -- non-fatal (prints a verdict, returns the
+    # gap, tol=1e-3 default) -- and it never got a chance to run because shap's stricter one
+    # always fired first. Every caller that wants the check now gets ONLY shap_kit's version;
+    # attribute.py callers that want it must call shap_kit.check_additivity() explicitly (or use
+    # shap_kit.compute(), which is the same code path).
+    values = expl.shap_values(X, check_additivity=False)
     if isinstance(values, list):                       # some versions return one array per class
         values = values[-1]
     values = np.asarray(values)

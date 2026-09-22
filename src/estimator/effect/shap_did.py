@@ -68,11 +68,14 @@ This needs SHAP attributions that do not exist anywhere else in the pipeline: v2
 `attributions` (from `00_SHAP.ipynb`/`attribute.py`) are drawn from v2's TRAIN/VAL/TEST splits —
 the era v2 was FIT on (2018-2020) — never from `log_features`, v2's SERVING-time matrix, which is
 the only place these shared claims' v2-side features live (the era v2 was actually DEPLOYED over).
-So a dedicated `attribute.py` run against `log_features`, restricted via `--explain-ids` to exactly
-`corrector_targets_v3_<split>.parquet`'s claim_ids, is required before `shared_claim_table()` can
-read anything — see the recipe in `notebook/real/shap_did/04_02_shap_did_concentration.ipynb`'s own
-markdown cell. `shared_claim_paths()` deliberately does not fall back to anything if that has not
-been run: there is no substitute computable inside the analysis env.
+So a dedicated SHAP run against `log_features`, restricted to exactly
+`corrector_targets_v3_<split>.parquet`'s claim_ids (v3's own side gets the identical restriction,
+against its normal `processed_inputs`, so the two sides stay paired), is required before
+`shared_claim_table()` can read anything —
+`notebook/real/shap_did/04_02_SHAP_shared_claims_v2v3.ipynb` is that run (once under the env-v2
+kernel, once under env-v3; writes into `SHARED_CLAIM_DIR` below). `shared_claim_paths()`
+deliberately does not fall back to anything if that has not been run: there is no substitute
+computable inside the analysis env.
 
 `estimate_shared()` has its own local (RDD) twin, `estimate_shared_local()`, the same relationship
 `estimate_local()` has to `estimate()` — see `shared_local_region()` / `select_shared_local_h()`.
@@ -139,12 +142,12 @@ def version_pair_table(version: str, split: str) -> pd.DataFrame:
     return tags.merge(attrs, on=ID_COL, how="inner")
 
 
-#: v2<->v3 shared-claim SHAP artefacts (module docstring "Paired shared-claim variant") live
-#: beside `shap_did_input` under `estimation/shap_did/` — the same "estimation/, not detection/"
-#: rule config.py's FALLBACK comment states for that kind — rather than as a config.py KIND: this
-#: pair exists only for this one Build-04 comparison, not for every (kind, version, split) config
-#: already enumerates.
-SHARED_CLAIM_DIR = config.ROOT / "src" / "data" / "real" / "estimation" / "shap_did"
+#: v2<->v3 shared-claim SHAP artefacts (module docstring "Paired shared-claim variant") live in
+#: their own directory, NOT as a config.py KIND: this pair exists only for this one Build-04
+#: comparison, not for every (kind, version, split) config already enumerates, and it is written
+#: by `04_02_SHAP_shared_claims_v2v3.ipynb` (run once per kernel, v2 then v3), not by
+#: `attribute.py` — see that notebook for how these files are actually produced.
+SHARED_CLAIM_DIR = config.ROOT / "src" / "data" / "real" / "estimation" / "shared_claim_shap"
 
 
 def shared_claim_paths(v3_split: str) -> dict[str, pathlib.Path]:
@@ -186,9 +189,8 @@ def shared_claim_table(v3_split: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     if missing:
         raise FileNotFoundError(
             f"shared-claim SHAP not built yet for v3/{v3_split}: missing {missing} under "
-            f"{SHARED_CLAIM_DIR} — run the attribute.py recipe in this notebook's own markdown "
-            f"cell first (company laptop: env-v2 against log_features, then env-v3 against "
-            f"processed_inputs, both restricted to {paths['explain_ids'].name}'s claim_ids)."
+            f"{SHARED_CLAIM_DIR} — run notebook/real/shap_did/04_02_SHAP_shared_claims_v2v3.ipynb "
+            f"restricted to {paths['explain_ids'].name}'s claim_ids)."
         )
 
     ct = pd.read_parquet(paths["explain_ids"])[[ID_COL, schema.DECISION]]
