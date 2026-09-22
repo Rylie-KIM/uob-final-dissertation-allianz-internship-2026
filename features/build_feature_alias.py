@@ -24,6 +24,13 @@ warning rather than failing the whole build — useful while registries are buil
 
 Writes features/registry/feature_alias_map.json (config.alias_map_path()). That path matches
 features/registry/*.json in .gitignore, so the real names inside it never reach git.
+
+``--allow-dummy`` builds from the local DUMMY registries instead of skipping them — for the local
+laptop only, so notebook code that imports ``feature_alias`` (``to_alias`` etc.) has something to
+read while `model_repos/real/` is empty. The output is exactly as fake as the DUMMY registries it
+reads from (fabricated names like ``make_FORD``) — never the real map, just the wiring exercised
+end to end. On the company laptop, run with no flag: a real registry present alongside a
+still-dummy one must still skip the dummy one, not alias fabricated names into the same file.
 """
 
 from __future__ import annotations
@@ -43,26 +50,29 @@ def _is_dummy(version: str) -> bool:
     return "DUMMY" in str(payload.get("model_path", ""))
 
 
-def build_one(version: str) -> dict | None:
+def build_one(version: str, allow_dummy: bool = False) -> dict | None:
     p = config.registry_path(version)
     if not p.is_file():
         print(f"[{version}] SKIP — {p} does not exist yet.")
         return None
-    if _is_dummy(version):
+    dummy = _is_dummy(version)
+    if dummy and not allow_dummy:
         print(f"[{version}] SKIP — {p} is the local DUMMY stand-in registry, not the real one.")
         return None
 
     names = config.model_features(version)
     real_to_alias = {name: f"{version}_feat_{i:02d}" for i, name in enumerate(names, start=1)}
     alias_to_real = {alias: real for real, alias in real_to_alias.items()}
-    print(f"[{version}] {len(names)} features aliased (trained order).")
+    tag = " [DUMMY stand-in]" if dummy else ""
+    print(f"[{version}] {len(names)} features aliased (trained order).{tag}")
     return {"order": names, "real_to_alias": real_to_alias, "alias_to_real": alias_to_real}
 
 
 def main() -> None:
+    allow_dummy = "--allow-dummy" in sys.argv[1:]
     payload: dict[str, dict] = {}
     for version in config.VERSION_LABELS:
-        built = build_one(version)
+        built = build_one(version, allow_dummy=allow_dummy)
         if built is not None:
             payload[version] = built
 
@@ -72,12 +82,14 @@ def main() -> None:
             "    <env-v1 python> features/extract_features_v1.py --model <v1 pkl>\n"
             "    <env-v2 python> features/extract_features.py --version v2\n"
             "    <env-v3 python> features/extract_features.py --version v3\n"
+            "or, on the LOCAL laptop only, pass --allow-dummy to alias the local DUMMY registries."
         )
 
     out = config.alias_map_path()
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(f"-> {out} ({', '.join(payload)})")
+    tag = " — DUMMY stand-in, not the real map" if allow_dummy else ""
+    print(f"-> {out} ({', '.join(payload)}){tag}")
 
 
 if __name__ == "__main__":
