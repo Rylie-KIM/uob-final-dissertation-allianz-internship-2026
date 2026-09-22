@@ -20,8 +20,13 @@ import schema
 
 
 class DoseMeter:
-    """Measures dose(v): share of `version`'s OWN training claims whose label the PRIOR
-    version's scrap decision forced (never garage-verified)."""
+    """Measures dose(v): among corrector_targets rows (already join- and mismatch-filtered,
+    see 03_01_corrector_inputs), the share forced total-loss by the PRIOR version's scrap
+    decision -- n_scrapped / n_out, conditioned on claims with a known treatment status.
+
+    Different quantity from Table tab:data-composition's scrap rate, which divides by ALL
+    target rows instead (n_scrapped / n_targets) -- so dose(v) >= that table's figure
+    whenever the join dropped rows (unmatched claim_ids or observed/status mismatches)."""
 
     def measure(self, version: str, split: str) -> float | None:
         """`measure("v1", ...)` is 0 by construction: no prior model exists to have forced a v1
