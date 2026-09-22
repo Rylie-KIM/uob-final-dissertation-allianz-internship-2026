@@ -100,6 +100,8 @@ _NEUTRAL_SUFFIXES = (
     "_04_02_score_drift_hist",
     "_04_02_shared_claims_scores",
     "04_02_v2_v3_score_drift_and_dose",
+    "04_02_shared_shap_did_estimate",
+    "04_02_shared_local_shap_did_estimate",
     # shap_did/04_03_shap_did_mitigation_delta.ipynb — concentration/DiD summary tables
     "_04_03_step1_within_version",
     "04_03_step2_corruption_footprint",
@@ -120,11 +122,15 @@ _NEUTRAL_SUFFIXES = (
 # suffix because a run label or basis slug is appended after it (00_shap_attribution.ipynb's
 # `profile_<run>_<basis>`, `decision_side_profile_<run_label>`,
 # `backend_comparison_summary_<run_int>_vs_<run_tpd>` — none of these ever carry a feature name).
+# shap_did/04_02's `04_02_shared_local_band_h_selection_<split>` is the same shape: a v3 split
+# name ("train"/"oot") appended after the cell-count grid table's own name (no feature name in
+# either the fixed part or the split suffix).
 _NEUTRAL_PREFIXES = (
     "profile_",
     "decision_side_profile_",
     "backend_comparison_summary_",
     "run_meta_",
+    "04_02_shared_local_band_h_selection_",
 )
 
 # Same idea again, for a name with a variable part in the MIDDLE (00_shap_attribution.ipynb's
