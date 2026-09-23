@@ -62,8 +62,10 @@ routine: a grid search over BAND_H_GRID for the smallest h whose cell 1 clears M
 boundary band, a different population), capped at H_MAX so the gate can never be met by simply
 de-localising "band". Promoted 2026-09-23 from
 `notebook/real/mitigation/03_02_reweight_mitigation.ipynb` §1b/§2c, which now imports
-`band_table`/calls `select_band_h()` from here instead of redefining them; CLIP_HI selection
-(the variance/ESS gate) stays notebook-only, a separate concern not covered by this promotion.
+`band_table`/calls `select_band_h()` from here instead of redefining them. CLIP_HI selection
+itself (the sweep over candidate ceilings) stays notebook-only, a separate concern not covered
+by this promotion — but `ess_frac()`, the ESS diagnostic that sweep gates on, is also here now,
+and `correct()` reports it for every run's own output weights, not only during selection.
 
 WHICH COLUMNS g SEES: config.model_features(version) — the exported matrix carries the target
 beside the inputs, so "everything except claim_id" would fit g on the outcome it is trying to
@@ -126,6 +128,19 @@ def band_table(score: np.ndarray, tau: np.ndarray, y: np.ndarray,
         rows.append({"band_h": h, **{f"n_cell{c}": int(n.get(c, 0)) for c in (1, 2, 3, 4)},
                      "cell1_pass": bool(n.get(1, 0) >= min_n)})
     return pd.DataFrame(rows).set_index("band_h")
+
+
+def ess_frac(w: np.ndarray) -> float:
+    """Kish's effective sample size, (sum w)^2 / sum(w^2), as a fraction of len(w).
+
+    A general diagnostic of ANY weight vector, not specific to a clip_hi sweep — `correct()`
+    below reports it for whatever weights it just produced (every scheme, not only rarity/pnu),
+    and the CLIP_HI selection sweep in
+    `notebook/real/mitigation/03_02_reweight_mitigation.ipynb` §1b/§2c imports this rather than
+    redefining it. That sweep itself (clip_table / select_clip_hi) stays notebook-only — only
+    this primitive was promoted, 2026-09-23.
+    """
+    return float(w.sum() ** 2 / (w * w).sum() / len(w))
 
 
 class ReweightCorrector(TrainingDataCorrector):
@@ -409,6 +424,11 @@ class ReweightCorrector(TrainingDataCorrector):
             "weight_sum": round(float(w.sum()), 2),
             # the effective class balance the retrain will see (weighted share of label=1)
             "weighted_pos_share": round(float((w * out["label"]).sum() / w.sum()), 4),
+            # design effect of THIS run's actual output weights (1.0 for naive/transport, where
+            # weights are uniform or close to it; <1.0 wherever rarity/pnu's cell multipliers
+            # concentrate mass) — previously only computed transiently during the CLIP_HI
+            # selection sweep, never recorded for the weights actually written to disk
+            "ess_frac": round(ess_frac(w), 4),
         })
         return out[[id_col, "label", "weight"]], diag
 
