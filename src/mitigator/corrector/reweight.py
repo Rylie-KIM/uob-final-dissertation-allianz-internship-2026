@@ -54,6 +54,17 @@ so `naive` and `transport` are byte-identical under either mode; only rarity / p
     tau_mode="fixed"    one scalar for every row: `tau` if given, else read off the frame
                         (threshold.read_off = min score among decision=1 — 03_02's applied_tau)
 
+BAND WIDTH. `band_h` itself (the boundary half-width above) is a caller-supplied scalar here,
+never tuned by this class — exactly like tau in fixed mode. `select_band_h()` is the selection
+routine: a grid search over BAND_H_GRID for the smallest h whose cell 1 clears MIN_CELL_N=100
+(power gate: RSE ~ 1/sqrt(n), ~10% at n=100 vs ~14% at n=50 — the same rationale
+`estimator/effect/shap_did.py`'s `select_local_h()` re-derives independently for its own RDD
+boundary band, a different population), capped at H_MAX so the gate can never be met by simply
+de-localising "band". Promoted 2026-09-23 from
+`notebook/real/mitigation/03_02_reweight_mitigation.ipynb` §1b/§2c, which now imports
+`band_table`/calls `select_band_h()` from here instead of redefining them; CLIP_HI selection
+(the variance/ESS gate) stays notebook-only, a separate concern not covered by this promotion.
+
 WHICH COLUMNS g SEES: config.model_features(version) — the exported matrix carries the target
 beside the inputs, so "everything except claim_id" would fit g on the outcome it is trying to
 recover.
@@ -91,6 +102,31 @@ CELL_NAMES = {
     3: "low-repairable",
     4: "low-total-loss ",
 }
+
+#: band-width grid-selection defaults — see module docstring "BAND WIDTH".
+BAND_H_GRID = (0.005, 0.0075, 0.01, 0.015, 0.02, 0.03, 0.05, 0.075, 0.1)
+MIN_CELL_N = 100        # power gate: RSE ~ 1/sqrt(n), ~10% at n=100 vs ~14% at n=50 — the v3
+                        # train window also spans TWO decider regimes, so a pooled 50 could
+                        # leave ~25 rows per era; a credibility floor, not a precision knob
+H_MAX = 0.05            # locality cap: widening the band is the only way to satisfy the gate,
+                        # so without a cap the gate could always be met by de-localising "band"
+BAND_H_FALLBACK = 0.01  # this module's own band_h default — last resort when no h <= H_MAX passes
+
+
+def band_table(score: np.ndarray, tau: np.ndarray, y: np.ndarray,
+                grid: tuple[float, ...] = BAND_H_GRID, min_n: int = MIN_CELL_N) -> pd.DataFrame:
+    """Cell occupancy per candidate band_h. Mirrors `ReweightCorrector.correct`'s own cell rule
+    exactly (`cell = np.where(score >= tau - h, 1 + y, 3 + y)`), so this table can never drift
+    from what the corrector itself would put in each cell at that h.
+    """
+    rows = []
+    for h in sorted(grid):
+        cell = np.where(score >= tau - h, 1 + y, 3 + y)
+        n = pd.Series(cell).value_counts()
+        rows.append({"band_h": h, **{f"n_cell{c}": int(n.get(c, 0)) for c in (1, 2, 3, 4)},
+                     "cell1_pass": bool(n.get(1, 0) >= min_n)})
+    return pd.DataFrame(rows).set_index("band_h")
+
 
 class ReweightCorrector(TrainingDataCorrector):
     """03_02's reweighting schemes behind the TrainingDataCorrector interface."""
@@ -189,6 +225,37 @@ class ReweightCorrector(TrainingDataCorrector):
         mult = (1.0 / (freq.size * freq)).clip(self.clip_lo, self.clip_hi)
         mult = mult / mult.mean()
         return mult.to_dict()
+
+    def select_band_h(
+        self, score: np.ndarray, tau: np.ndarray, y: np.ndarray,
+        grid: tuple[float, ...] = BAND_H_GRID, min_n: int = MIN_CELL_N,
+        h_max: float = H_MAX, fallback: float = BAND_H_FALLBACK,
+    ) -> tuple[float, pd.DataFrame]:
+        """Grid search on CELL COUNTS ONLY (cell 1's occupancy) — never on a corrected metric
+        computed from these rows, the same reason tau is never tuned on IPS-corrected data
+        (thesis subsec:ips): tuning on this split's contaminated labels would just fit the
+        corrector to the loop it distrusts. Promoted from
+        `notebook/real/mitigation/03_02_reweight_mitigation.ipynb` §1b/§2c, which now calls this
+        instead of redefining it — the same discipline
+        `estimator/effect/shap_did.py::select_local_h()` re-derives independently for its own RDD
+        boundary band (same MIN_CELL_N=100 rationale, a different population).
+
+        score/tau/y: the deciding score, per-row tau (`_tau_per_row`), and observed outcome for
+        the WHOLE population §2c selects on — never a pre-filtered subset.
+        """
+        table = band_table(score, tau, y, grid=grid, min_n=min_n)
+        ok = table.index[table["cell1_pass"] & (table.index <= h_max)]
+        if len(ok):
+            chosen = float(ok[0])
+            print(f"selected band_h={chosen} (smallest with n_cell1 >= {min_n}, h<={h_max})")
+        else:
+            chosen = fallback
+            wide = (" (only h > h_max would reach it — de-localising)"
+                    if table["cell1_pass"].any() else "")
+            print(f"!! no h <= {h_max} reaches n_cell1 >= {min_n}: the verified edge is thin at "
+                  f"every width tried{wide}. Keeping fallback band_h={chosen}; treat rarity/pnu "
+                  f"as low-power, a label-starvation finding, not a parameter to widen.")
+        return chosen, table
 
     def _transport(
         self, m: pd.DataFrame, feat_cols: list[str],
