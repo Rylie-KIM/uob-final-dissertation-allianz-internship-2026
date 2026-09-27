@@ -110,6 +110,64 @@ LOCAL_H_MAX = 0.05        # locality cap -- otherwise the gate is met by de-loca
 LOCAL_H_FALLBACK = 0.01   # 03_02's own fallback constant, reused only as a last resort here too
 
 
+def assign_era(dates: pd.Series) -> tuple[pd.Series, pd.Timestamp]:
+    """early/late by the MEDIAN date within this population. A PLACEHOLDER split.
+
+    Median split is the safe default because it works identically for v2 (piecewise tau, five
+    regimes) and v3 (single global tau, never deployed) without hand-picking a version-specific
+    cutoff. A real per-version regime-aware split (e.g. v2's own tau-regime breaks,
+    config.DECISION_RULES["v2"]["regimes"]) may be a sharper choice once real dates are visible —
+    see `04_01_shap_did_inputs.ipynb`'s own Notes cell.
+    """
+    dates = pd.to_datetime(dates)
+    cutoff = dates.median()
+    era = pd.Series(np.where(dates <= cutoff, "early", "late"), index=dates.index)
+    return era, cutoff
+
+
+def build_shap_did_input(version: str, split: str) -> pathlib.Path:
+    """targets + scores + that version's OWN decision rule -> region (A/B) + era (early/late).
+
+    Promoted from `04_01_shap_did_inputs.ipynb` §2 (2026-09-24) — that notebook's §2b/§3/§4 call
+    this once per (version, split) and is now the presentation layer, the same relationship
+    `04_02_shap_did_concentration.ipynb` already has to `cross_version_estimate`/`estimate()`
+    above (see the module docstring's second paragraph).
+
+    Deliberately does NOT touch the attributions parquet (the phi matrix) — this is a small
+    claim-level tag table. 04-02 joins it onto attributions by claim_id and computes the
+    concentration measures (Hill / Shannon / Simpson) per (region, era) cell from there.
+    """
+    d = load(version, split=split)
+    df = d.frame.copy()
+    # d.decisions is where tau is actually resolved per row (loaders.VersionData.decisions ->
+    # threshold.apply(): v2's own regime lookup by date, v1's flat fallback, v3's single global
+    # cutoff) -- nothing below this line touches a date or a regime table.
+    df[schema.DECISION] = d.decisions
+    df["region"] = np.where(df[schema.DECISION] == 1, "B", "A")  # B: score > tau, STRICT
+    df["era"], cutoff = assign_era(df[schema.DATE])
+
+    out = df[[ID_COL, schema.DATE, d.score_col, schema.DECISION, "region", "era",
+              schema.OBSERVED]].rename(columns={d.score_col: "score"})
+
+    p = config.split_path("shap_did_input", version, split)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(p, index=False)
+
+    counts = out.groupby(["era", "region"])[ID_COL].count().to_dict()
+    p.with_name(p.stem + "_meta.json").write_text(json.dumps({
+        "version": version, "split": split, "n_claims": int(len(out)),
+        "era_cutoff_date": str(cutoff.date()),
+        "era_rule": "median date within this (version, split) population — PROVISIONAL",
+        "region_rule": "decision==1 -> B (score>tau, strict); else A",
+        "cell_counts": {f"{k[0]}/{k[1]}": int(v) for k, v in counts.items()},
+        "columns": list(out.columns),
+    }, indent=2), encoding="utf-8")
+
+    print(f"[{version}] {split}: {len(out):,} claims | era cutoff {cutoff.date()} | cells {counts}")
+    print(f"  -> {p.name}")
+    return p
+
+
 def region_tag_inline(version: str, split: str) -> pd.DataFrame:
     """region(A/B) built in memory for a (version, split) with no persisted `shap_did_input` file
     yet — a defensive fallback: `04_01_shap_did_inputs.ipynb` is the normal path for all three
@@ -117,11 +175,11 @@ def region_tag_inline(version: str, split: str) -> pd.DataFrame:
     (re)run for the (version, split) asked for here.
 
     Includes "score" (renamed from that version's own `d.score_col`, same rule
-    `04_01_shap_did_inputs.ipynb::build_shap_did_input` uses) so `estimate_local()`'s band
-    restriction has a column to band around even on this fallback path — the notebook's own
-    original inline fallback omitted it, which only ever surfaced as a latent KeyError because
-    `estimate()` (whole-population) never needed "score" and the local estimator was only ever
-    called for v2->v3, which always had a `shap_did_input` file in practice.
+    `build_shap_did_input` above uses) so `estimate_local()`'s band restriction has a column to
+    band around even on this fallback path — the notebook's own original inline fallback omitted
+    it, which only ever surfaced as a latent KeyError because `estimate()` (whole-population)
+    never needed "score" and the local estimator was only ever called for v2->v3, which always
+    had a `shap_did_input` file in practice.
     """
     d = load(version, split=split)
     df = d.frame.copy()
@@ -131,15 +189,34 @@ def region_tag_inline(version: str, split: str) -> pd.DataFrame:
     return df[[ID_COL, schema.DATE, "score", "region"]]
 
 
-def version_pair_table(version: str, split: str) -> pd.DataFrame:
+def version_pair_table(version: str, split: str, tag: str = "baseline") -> pd.DataFrame:
     """region-tagged claims joined to that (version, split)'s attributions — via 04_01's
-    `shap_did_input` file if it exists, else built inline."""
+    `shap_did_input` file if it exists, else built inline.
+
+    `tag="baseline"` (every caller before 2026-09-23) reads that version's own `attributions`
+    kind through `loaders.load`, byte-identical to before this parameter existed. Any other `tag`
+    reads the `mitigated_attributions` kind for that correction axis instead —
+    `reeval.metrics.shap_did_delta.ShapDiDDelta` is the only caller that passes one; see that
+    module's docstring for what a non-baseline tag means and why this stays a keyword on the
+    existing function rather than a second one.
+    """
     if config.split_path("shap_did_input", version, split).is_file():
         tags = pd.read_parquet(config.split_path("shap_did_input", version, split))
     else:
         tags = region_tag_inline(version, split)
-    attrs = load(version, split=split).attributions
+    attrs = _tag_attributions(version, split, tag)
     return tags.merge(attrs, on=ID_COL, how="inner")
+
+
+def _tag_attributions(version: str, split: str, tag: str) -> pd.DataFrame:
+    """`tag`'s attributions parquet — baseline via `loaders.load` (unchanged path), any other tag
+    via the `mitigated_attributions` kind with `tag` appended to the file stem (03_03_retrain's
+    own per-axis naming, the same convention `04_03_shap_did_mitigation_delta.ipynb` used before
+    this function existed)."""
+    if tag == "baseline":
+        return load(version, split=split).attributions
+    base = config.path("mitigated_attributions", version, split=split)
+    return pd.read_parquet(base.with_name(f"{base.stem}_{tag}{base.suffix}"))
 
 
 #: v2<->v3 shared-claim SHAP artefacts (module docstring "Paired shared-claim variant") live in
