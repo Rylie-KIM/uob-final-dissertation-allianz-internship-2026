@@ -124,6 +124,36 @@ def _select(df: pd.DataFrame, ids: list | None, id_col: str, n: int | None, seed
     return df
 
 
+def _to_float64(X: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Plain float64, one column at a time -- what shap.TreeExplainer actually needs.
+
+    shap converts the WHOLE frame in one `np.asarray()` call. pandas hands back a dtype=object
+    array for the entire frame the instant even one column is a nullable extension dtype
+    (Int64/Float64/boolean -- what read_parquet gives an integer column that has NaNs), even
+    though every individual column reports numeric. shap then either fails casting that object
+    array to float64 itself (numpy: "Cannot cast array data from dtype('O') to dtype('float64')")
+    or hits its C extension's "found a NULL input array" one layer lower. Converting per column
+    here is meaning-preserving (pandas NA -> numpy NaN -- the same value a plain-float64 export
+    already stores) for a genuine nullable-dtype column; a column that is actually non-numeric
+    (an unencoded categorical, a stray string) fails the cast and is refused by name below rather
+    than silently coerced.
+    """
+    bad = []
+    out = {}
+    for c in X.columns:
+        try:
+            out[c] = X[c].astype("float64")
+        except (TypeError, ValueError):
+            bad.append(f"{c} ({X[c].dtype})")
+    if bad:
+        raise SystemExit(
+            f"{label}: {len(bad)} column(s) will not cast to float64 -- genuinely non-numeric, "
+            f"not just a nullable-dtype quirk, so this refuses rather than guessing what they "
+            f"should become: {', '.join(bad)}"
+        )
+    return pd.DataFrame(out, index=X.index)
+
+
 def _estimator(obj):
     """The thing that owns the trees.
 
@@ -231,7 +261,9 @@ def main() -> None:
     else:
         X_bg = _select(df, bg_ids, a.id_col, a.background, a.seed + 1, "background")[feature_cols]
 
-    X = X_exp_rows[feature_cols]
+    X = _to_float64(X_exp_rows[feature_cols], "--features (explain rows)")
+    if X_bg is not None:
+        X_bg = _to_float64(X_bg, "--background")
     try:
         phi, base, meta = _compute_attribute(est, X, background=X_bg, backend=a.backend)
     except Exception as exc:
