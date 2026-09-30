@@ -104,10 +104,8 @@ _NEUTRAL_SUFFIXES = (
     "04_02_shared_local_shap_did_estimate",
     # shap_did/04_03_shap_did_mitigation_delta.ipynb — concentration/DiD summary tables
     "_04_03_step1_within_version",
-    "04_03_step2_corruption_footprint",
-    "04_03_step2_shap_did_delta",
+    "04_03_step2_shap_did_results",
     "04_03_step3_local_h_selection",
-    "04_03_step3_shap_did_delta_local",
     "04_03_whole_vs_local",
     # 00_shap_attribution.ipynb — version/basis/run-level summaries, no per-feature content
     "feature_overlap_pairs_per_version",
